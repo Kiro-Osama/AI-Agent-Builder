@@ -1,0 +1,26 @@
+# ============================================
+# Celery Worker Requirements
+# ============================================
+celery[redis]==5.4.0
+redis==5.2.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+pgvector==0.3.6
+alembic==1.14.1
+
+# HTTP client (OpenRouter + Gemini API)
+httpx==0.28.1
+
+# Docker SDK
+docker==7.1.0
+
+# LangGraph (Orchestrator)
+langgraph>=0.2.60
+langchain-core>=0.3.29
+langchain-openai>=0.3.0
+
+# Utilities
+python-dotenv==1.0.1
