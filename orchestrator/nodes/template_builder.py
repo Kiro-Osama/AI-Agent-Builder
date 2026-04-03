@@ -112,6 +112,12 @@ async def template_builder(state: AgentBuilderState) -> dict:
             for agent in result.get("agents", []):
                 agent["assigned_openrouter_model"] = preferred_model
 
+        # ---- CRITICAL: Inject full MCP metadata ----
+        # The LLM template only has {name, running_port} for MCPs.
+        # We need to inject docker_image, run_config, tools_provided
+        # from the pipeline state so the chat system can start containers.
+        _inject_mcp_metadata(result, running_mcps, selected_tools.get("mcps", []))
+
         # Add status
         result["status"] = "ready_for_user_approval"
 
@@ -122,16 +128,29 @@ async def template_builder(state: AgentBuilderState) -> dict:
         logger.error(f"Template builder failed: {e}")
         # Build a fallback template using FREE model
         import os
-        default_model = preferred_model or os.getenv("DEFAULT_CHAT_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+        default_model = preferred_model or os.getenv("DEFAULT_CHAT_MODEL", "openrouter/free")
+        
+        # Build full MCP entries for the fallback
+        all_mcps = running_mcps + selected_tools.get("mcps", [])
+        full_mcps = []
+        seen = set()
+        for m in all_mcps:
+            name = m.get("mcp_name", "")
+            if name not in seen and m.get("docker_image"):
+                seen.add(name)
+                full_mcps.append({
+                    "mcp_name": name,
+                    "docker_image": m["docker_image"],
+                    "run_config": m.get("run_config", {}),
+                    "tools_provided": m.get("tools_provided", []),
+                })
+        
         fallback = {
             "project_type": "single_agent",
             "agents": [{
                 "agent_name": "AI_Assistant",
                 "assigned_openrouter_model": default_model,
-                "selected_mcps": [
-                    {"name": m["mcp_name"], "running_port": m.get("running_port")}
-                    for m in running_mcps if m.get("status") != "failed"
-                ],
+                "selected_mcps": full_mcps,
                 "selected_skills": [s["skill_id"] for s in selected_skills],
                 "system_prompt": f"You are a highly capable AI assistant. Your task: {user_query}\n\nYou have access to the following tools and should use them to complete the task effectively.",
                 "sub_task": user_query,
@@ -144,3 +163,68 @@ async def template_builder(state: AgentBuilderState) -> dict:
             "final_template": fallback,
             "errors": state.get("errors", []) + [f"Template builder: {str(e)}"],
         }
+
+
+def _inject_mcp_metadata(template: dict, running_mcps: list, selected_mcps: list) -> None:
+    """
+    Inject full MCP metadata (docker_image, run_config, tools_provided) into 
+    agents' selected_mcps. The LLM only outputs {name, running_port} so we
+    need to merge in the real data from the pipeline state.
+    """
+    # Build a lookup map: mcp_name → full metadata
+    mcp_lookup: dict[str, dict] = {}
+    
+    for m in selected_mcps:
+        name = m.get("mcp_name", "")
+        if name and m.get("docker_image"):
+            mcp_lookup[name] = {
+                "mcp_name": name,
+                "docker_image": m["docker_image"],
+                "run_config": m.get("run_config", {}),
+                "tools_provided": m.get("tools_provided", []),
+                "default_ports": m.get("default_ports", []),
+                "category": m.get("category", ""),
+            }
+    
+    for m in running_mcps:
+        name = m.get("mcp_name", "")
+        if name:
+            if name not in mcp_lookup:
+                mcp_lookup[name] = {}
+            mcp_lookup[name].update({
+                "mcp_name": name,
+                "docker_image": m.get("docker_image", mcp_lookup.get(name, {}).get("docker_image", "")),
+                "run_config": m.get("run_config", mcp_lookup.get(name, {}).get("run_config", {})),
+                "tools_provided": m.get("tools_provided", mcp_lookup.get(name, {}).get("tools_provided", [])),
+                "container_id": m.get("container_id"),
+                "running_port": m.get("running_port"),
+                "transport": m.get("transport", "stdio"),
+            })
+
+    # Now enrich each agent's selected_mcps
+    for agent in template.get("agents", []):
+        raw_mcps = agent.get("selected_mcps", [])
+        enriched = []
+        
+        for mcp_entry in raw_mcps:
+            # The LLM may output {name, running_port} or {mcp_name, ...}
+            name = mcp_entry.get("name") or mcp_entry.get("mcp_name", "")
+            
+            if name in mcp_lookup:
+                # Merge LLM data with actual metadata
+                full = dict(mcp_lookup[name])
+                full.update({k: v for k, v in mcp_entry.items() if v is not None})
+                full["mcp_name"] = name  # Normalize key
+                enriched.append(full)
+            else:
+                # MCP not in lookup — keep as-is but log warning
+                logger.warning(f"  MCP '{name}' from LLM template not found in pipeline state")
+                mcp_entry["mcp_name"] = name
+                enriched.append(mcp_entry)
+        
+        # If LLM didn't include any MCPs but we have them, add all
+        if not enriched and mcp_lookup:
+            logger.info("  LLM template had no MCPs, injecting all from pipeline")
+            enriched = list(mcp_lookup.values())
+        
+        agent["selected_mcps"] = enriched

@@ -3,11 +3,13 @@
 # ============================================
 FROM python:3.11-slim
 
-# Install system dependencies (Docker CLI for container management)
+# Install minimal system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    docker.io \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI (needed to start MCP containers via subprocess)
+COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 
 WORKDIR /app
 ENV PYTHONPATH=/app

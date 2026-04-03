@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-DEFAULT_CHAT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+DEFAULT_CHAT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "openrouter/free")
 
 # -----------------------------------------------
 # Model complexity mapping

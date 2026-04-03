@@ -32,7 +32,11 @@ async def lifespan(app: FastAPI):
     logger.info(f"   Environment: {settings.app_env}")
     logger.info(f"   Model: {settings.default_chat_model}")
     yield
-    logger.info("🛑 Agent Builder V5 API shutting down...")
+    # Cleanup all MCP container sessions on shutdown
+    logger.info("🛑 Cleaning up MCP sessions...")
+    from core.agent_session import cleanup_all_sessions
+    await cleanup_all_sessions()
+    logger.info("🛑 Agent Builder V5 API shut down.")
 
 
 # -----------------------------------------------

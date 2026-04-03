@@ -1,8 +1,16 @@
 """
-Chat Router
-=============
-POST /api/v1/chat/{task_id} - Chat with a built agent.
-GET  /api/v1/chat/{task_id}/history - Get conversation history.
+Chat Router - Real Agent Execution
+=====================================
+POST /api/v1/chat/{task_id}   - Chat with a built agent (real tool calling)
+GET  /api/v1/chat/{task_id}/info - Get agent info
+
+On first message:
+    1. Load agent config from build history
+    2. Start MCP container sessions
+    3. Run agent loop (ReAct: LLM ↔ MCP tools)
+
+Subsequent messages:
+    Reuse existing MCP sessions + conversation history
 """
 import logging
 import os
@@ -12,23 +20,37 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core.openrouter import openrouter_client
+from core.agent_loop import run_agent_loop
+from core.agent_session import (
+    AgentSession,
+    get_session,
+    create_session,
+    cleanup_session,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# In-memory conversation store (keyed by conversation_id)
-# In production, use Redis or DB
+# In-memory conversation store
 conversations: dict[str, list[dict]] = {}
 
-# Store agent configs (loaded from build results)
+# Cache agent configs (loaded from build results)
 agent_configs: dict[str, dict] = {}
+
+DEFAULT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "openrouter/free")
 
 
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
-    model: str | None = None  # Override model (e.g. switch to free model)
+    model: str | None = None  # Override model
+
+
+class ToolCallInfo(BaseModel):
+    tool: str
+    args: dict
+    result: str
+    success: bool = True
 
 
 class ChatResponse(BaseModel):
@@ -36,15 +58,18 @@ class ChatResponse(BaseModel):
     agent_name: str
     model: str
     conversation_id: str
+    tool_calls: list[ToolCallInfo] = []
+    iterations: int = 1
+    mcps_connected: int = 0
 
 
 @router.post("/chat/{task_id}", response_model=ChatResponse)
 async def chat_with_agent(task_id: str, request: ChatRequest):
     """
-    Send a message to the agent built for this task.
-    Uses the agent's system prompt and model from the build template.
+    Send a message to a built agent.
+    The agent uses real MCP tools via JSON-RPC — not simulated.
     """
-    from sqlalchemy import select, create_engine
+    from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
     from core.models import BuildHistory
 
@@ -53,7 +78,7 @@ async def chat_with_agent(task_id: str, request: ChatRequest):
         "postgresql://agentbuilder:secure_password_change_me@db:5432/agentbuilder_db",
     )
 
-    # Load agent config if not cached
+    # ---- Load agent config ----
     if task_id not in agent_configs:
         engine = create_engine(SYNC_DB_URL)
         session = Session(engine)
@@ -67,15 +92,11 @@ async def chat_with_agent(task_id: str, request: ChatRequest):
             if not agents:
                 raise HTTPException(400, "No agents in template")
 
-            # Use the first agent
             agent = agents[0]
             agent_configs[task_id] = {
                 "agent_name": agent.get("agent_name", "AI_Assistant"),
                 "system_prompt": agent.get("system_prompt", "You are a helpful AI assistant."),
-                "model": agent.get(
-                    "assigned_openrouter_model",
-                    os.getenv("DEFAULT_CHAT_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
-                ),
+                "model": agent.get("assigned_openrouter_model", DEFAULT_MODEL),
                 "selected_mcps": agent.get("selected_mcps", []),
                 "selected_skills": agent.get("selected_skills", []),
             }
@@ -85,50 +106,68 @@ async def chat_with_agent(task_id: str, request: ChatRequest):
 
     config = agent_configs[task_id]
 
-    # Get or create conversation
+    # ---- Get or create conversation ----
     conv_id = request.conversation_id or str(uuid.uuid4())
     if conv_id not in conversations:
         conversations[conv_id] = []
 
     history = conversations[conv_id]
 
-    # Add user message
-    history.append({"role": "user", "content": request.message})
+    # ---- Get or create agent session (MCP containers) ----
+    agent_session = get_session(conv_id)
+    if not agent_session:
+        agent_session = create_session(conv_id)
+        selected_mcps = config.get("selected_mcps", [])
+        
+        if selected_mcps:
+            logger.info(
+                f"[Chat] Starting MCP session for {conv_id}: "
+                f"{[m.get('mcp_name') for m in selected_mcps]}"
+            )
+            try:
+                await agent_session.start(selected_mcps)
+            except Exception as e:
+                logger.error(f"[Chat] Failed to start MCP session: {e}")
+                # Continue without tools — agent will respond without them
 
-    # Build messages for the model
-    messages = [
-        {"role": "system", "content": config["system_prompt"]},
-        *history,
-    ]
+    # ---- Determine model ----
+    if request.model:
+        model = request.model
+    else:
+        model = config["model"]
+        # Auto-fallback expensive models to free in development
+        if os.getenv("APP_ENV") == "development":
+            if any(x in model for x in ["claude", "gpt-4", "gemini-pro"]):
+                model = DEFAULT_MODEL
 
+    # ---- Run agent loop ----
     try:
-        # Use user-specified model if provided, otherwise use agent's model
-        if request.model:
-            model = request.model
-        else:
-            model = config["model"]
-            # Auto-fallback paid models to free in dev
-            if "claude" in model or "gpt-4" in model:
-                model = os.getenv("DEFAULT_CHAT_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
-
-        response_text = await openrouter_client.chat_completion_text(
-            messages=messages,
+        result = await run_agent_loop(
+            session=agent_session,
+            system_prompt=config["system_prompt"],
+            history=history,
+            user_message=request.message,
             model=model,
-            temperature=0.7,
         )
 
-        # Add assistant response to history
+        response_text = result["response"]
+
+        # Update conversation history
+        history.append({"role": "user", "content": request.message})
         history.append({"role": "assistant", "content": response_text})
 
         return ChatResponse(
             response=response_text,
             agent_name=config["agent_name"],
-            model=model,
+            model=result.get("model", model),
             conversation_id=conv_id,
+            tool_calls=[ToolCallInfo(**tc) for tc in result.get("tool_calls", [])],
+            iterations=result.get("iterations", 1),
+            mcps_connected=len(agent_session.containers),
         )
 
     except Exception as e:
-        logger.error(f"Chat error: {e}")
+        logger.error(f"[Chat] Agent loop error: {e}", exc_info=True)
         raise HTTPException(500, f"Chat failed: {str(e)}")
 
 
@@ -168,3 +207,11 @@ async def get_agent_info(task_id: str):
     finally:
         session.close()
         engine.dispose()
+
+
+@router.delete("/chat/{conversation_id}/session")
+async def end_session(conversation_id: str):
+    """Explicitly end a chat session and cleanup MCP containers."""
+    await cleanup_session(conversation_id)
+    conversations.pop(conversation_id, None)
+    return {"status": "cleaned_up", "conversation_id": conversation_id}

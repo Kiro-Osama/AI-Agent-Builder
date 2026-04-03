@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Docker CLI (needed to start MCP containers via subprocess)
+COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
+
 WORKDIR /app
 ENV PYTHONPATH=/app
 

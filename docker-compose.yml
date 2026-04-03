@@ -102,7 +102,7 @@ services:
     container_name: agentbuilder-frontend
     restart: unless-stopped
     ports:
-      - "3000:80"
+      - "0.0.0.0:3000:80"
     depends_on:
       - api
 
