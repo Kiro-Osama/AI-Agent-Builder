@@ -21,7 +21,11 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_API_KEY_BACKUP = os.getenv("OPENROUTER_API_KEY_BACKUP", "")
 DEFAULT_CHAT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "google/gemma-4-26b-a4b-it:free")
+
+# All available API keys (primary + backup) for rotation on 429
+_API_KEYS: list[str] = [k for k in [OPENROUTER_API_KEY, OPENROUTER_API_KEY_BACKUP] if k]
 
 # Ordered fallback chain: if the primary model fails (429/400), try the next one.
 FREE_MODEL_CHAIN: list[str] = [
@@ -46,18 +50,22 @@ MODEL_TIERS = {
 }
 
 # Retry settings
-MAX_RETRIES = 3
-RETRY_BASE_DELAY = 2.0  # seconds
+MAX_RETRIES = 2
+RETRY_BASE_DELAY = 3.0  # seconds
+MAX_RETRY_DELAY = 15.0  # cap to avoid 120s waits
 
 
 class OpenRouterClient:
-    """Client for OpenRouter API - multi-model gateway."""
+    """Client for OpenRouter API — multi-model gateway with key rotation."""
 
     def __init__(self):
         self.base_url = OPENROUTER_BASE_URL
-        self.api_key = OPENROUTER_API_KEY
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
+        self.api_keys = list(_API_KEYS) if _API_KEYS else [OPENROUTER_API_KEY]
+        self._current_key_idx = 0
+
+    def _make_headers(self, api_key: str) -> dict:
+        return {
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://agent-builder.local",
             "X-Title": "Agent Builder V5",
@@ -73,12 +81,13 @@ class OpenRouterClient:
         response_format: dict | None = None,
     ) -> dict[str, Any]:
         """
-        Send a chat completion request to OpenRouter with automatic retry
-        and model fallback on 429.
+        Send a chat completion request with:
+        1. API key rotation (primary → backup on 429 daily-limit)
+        2. Model fallback chain (on 429 per-model or 400 invalid model)
+        3. Exponential backoff retry per model
         """
         primary_model = model or DEFAULT_CHAT_MODEL
 
-        # Build the fallback list: primary first, then chain (excluding dupes)
         models_to_try = [primary_model]
         for m in FREE_MODEL_CHAIN:
             if m != primary_model:
@@ -86,59 +95,83 @@ class OpenRouterClient:
 
         last_error: Exception | None = None
 
-        for model_id in models_to_try:
-            for attempt in range(MAX_RETRIES):
-                payload = {
-                    "model": model_id,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                }
-                if tools:
-                    payload["tools"] = tools
-                if response_format:
-                    payload["response_format"] = response_format
+        for key_idx, api_key in enumerate(self.api_keys):
+            headers = self._make_headers(api_key)
+            key_label = "primary" if key_idx == 0 else "backup"
 
-                try:
-                    async with httpx.AsyncClient(timeout=120.0) as client:
-                        response = await client.post(
-                            f"{self.base_url}/chat/completions",
-                            headers=self.headers,
-                            json=payload,
-                        )
-                        response.raise_for_status()
-                        return response.json()
+            for model_id in models_to_try:
+                for attempt in range(MAX_RETRIES):
+                    payload = {
+                        "model": model_id,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    }
+                    if tools:
+                        payload["tools"] = tools
+                    if response_format:
+                        payload["response_format"] = response_format
 
-                except httpx.HTTPStatusError as e:
-                    last_error = e
-                    status = e.response.status_code
+                    try:
+                        async with httpx.AsyncClient(timeout=120.0) as client:
+                            response = await client.post(
+                                f"{self.base_url}/chat/completions",
+                                headers=headers,
+                                json=payload,
+                            )
+                            response.raise_for_status()
+                            data = response.json()
+                            if "choices" not in data:
+                                logger.warning(
+                                    "No 'choices' in response from %s/%s: %s",
+                                    key_label, model_id, str(data)[:300],
+                                )
+                                break  # skip to next model
+                            return data
 
-                    if status == 429:
-                        delay = RETRY_BASE_DELAY * (2 ** attempt)
-                        logger.warning(
-                            "429 from %s (attempt %d/%d) — retrying in %.1fs",
-                            model_id, attempt + 1, MAX_RETRIES, delay,
-                        )
-                        await asyncio.sleep(delay)
-                        continue
+                    except httpx.HTTPStatusError as e:
+                        last_error = e
+                        status = e.response.status_code
+                        body = e.response.text
 
-                    if status == 400:
-                        # Invalid model or bad request — skip to next model immediately
-                        logger.warning("400 from %s — skipping to next model", model_id)
-                        break  # break retry loop, move to next model
+                        if status == 429:
+                            if "free-models-per-day" in body:
+                                logger.warning(
+                                    "Daily limit hit on %s key — switching keys", key_label,
+                                )
+                                break
 
-                    logger.error("OpenRouter API error: %s - %s", status, e.response.text)
-                    raise
-                except Exception as e:
-                    logger.error("OpenRouter request failed: %s", e)
-                    raise
+                            delay = min(RETRY_BASE_DELAY * (2 ** attempt), MAX_RETRY_DELAY)
+                            logger.warning(
+                                "429 from %s/%s (attempt %d/%d) — %.1fs",
+                                key_label, model_id, attempt + 1, MAX_RETRIES, delay,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
 
-            # All retries exhausted for this model — move to next
-            logger.warning("All %d retries exhausted for %s, trying next model...", MAX_RETRIES, model_id)
+                        if status == 400:
+                            logger.warning("400 from %s — skipping to next model", model_id)
+                            break
 
-        # Every model in the chain failed
-        logger.error("All models exhausted after retries. Last error: %s", last_error)
-        raise last_error or RuntimeError("All models in fallback chain returned 429")
+                        logger.error("OpenRouter API error: %s - %s", status, body)
+                        raise
+                    except Exception as e:
+                        logger.error("OpenRouter request failed: %s", e)
+                        raise
+
+                else:
+                    # Retry loop finished without break → all retries used
+                    logger.warning("Retries exhausted for %s/%s", key_label, model_id)
+                    continue  # try next model
+
+                # If we broke out of retry loop due to daily limit, break model loop too
+                if last_error and getattr(last_error, "response", None) is not None:
+                    resp_text = last_error.response.text
+                    if last_error.response.status_code == 429 and "free-models-per-day" in resp_text:
+                        break  # break model loop → next key
+
+        logger.error("All keys + models exhausted. Last error: %s", last_error)
+        raise last_error or RuntimeError("All API keys and models exhausted")
 
     async def chat_completion_text(
         self,
@@ -162,7 +195,10 @@ class OpenRouterClient:
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
         result = await self.chat_completion(messages, **kwargs)
-        message = result["choices"][0]["message"]
+        choices = result.get("choices")
+        if not choices:
+            raise ValueError(f"No choices in API response: {str(result)[:300]}")
+        message = choices[0]["message"]
 
         # Some models return content=null when they emit tool_calls instead.
         # Extract text from tool_call arguments as a fallback.

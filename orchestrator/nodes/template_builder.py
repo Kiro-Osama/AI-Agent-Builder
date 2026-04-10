@@ -1,8 +1,8 @@
 """
 Node 8: Template Builder
 ===========================
-Assembles the final Dynamic Template JSON from all gathered components.
-Determines single-agent vs multi-agent, picks the best model, writes system prompt.
+Assembles the final agent configuration JSON from all gathered components.
+Builds exactly ONE agent with the best model, tools, and system prompt.
 """
 import json
 import logging
@@ -12,24 +12,29 @@ from core.openrouter import openrouter_client
 
 logger = logging.getLogger(__name__)
 
-TEMPLATE_BUILDER_PROMPT = """You are an Agent Configurator. Build a final execution template as compact JSON.
+TEMPLATE_BUILDER_PROMPT = """You are an Agent Configurator. Build a single-agent execution template as compact JSON.
 
 Task: {user_query}
 
-MCPs available:
+MCPs available (Docker containers the agent can call):
 {running_mcps}
 
-Skills available:
+Skills available (knowledge overlays injected into the agent):
 {selected_skills}
 
 Rules:
-- Use single_agent unless task has clearly distinct parallel sub-tasks.
-- Model: simple→"meta-llama/llama-3.1-8b-instruct:free", medium→"anthropic/claude-3.5-sonnet", complex→"openai/gpt-4o"
-- selected_skills: include ONLY skill_ids directly relevant to this specific task (max 3).
-- system_prompt: 2-4 sentences describing the agent's role and what tools/skills to use.
+- Build exactly ONE agent that covers the ENTIRE task.
+- agent_name: short descriptive name (e.g. "GitHub_Monitor", "Data_Analyst").
+- assigned_openrouter_model: pick based on task complexity:
+  simple tasks → "meta-llama/llama-3.1-8b-instruct:free"
+  medium tasks → "google/gemma-4-26b-a4b-it:free"
+  complex tasks → "anthropic/claude-3.5-sonnet"
+- selected_mcps: include ONLY MCPs whose tools are directly needed. Use the "name" field from the list above.
+- selected_skills: include ALL skill_ids that are relevant to ANY part of the task.
+- system_prompt: 3-6 sentences. Describe the agent's role, what tools it has, when to use each tool, and how to approach the task step by step. Be specific — mention tool names and skill capabilities.
 
 Output ONLY this JSON (no markdown, no explanation):
-{"project_type":"single_agent","agents":[{"agent_name":"Name","assigned_openrouter_model":"model/id","sub_task":"task description","selected_mcps":[{"name":"mcp-name","running_port":null}],"selected_skills":["skill-id"],"system_prompt":"Agent instructions."}],"execution_order":"sequential","reasoning":"brief reason"}"""
+{"project_type":"single_agent","agents":[{"agent_name":"Name","assigned_openrouter_model":"model/id","sub_task":"full task description","selected_mcps":[{"name":"mcp-name","running_port":null}],"selected_skills":["skill-id"],"system_prompt":"Detailed agent instructions."}],"reasoning":"brief reason"}"""
 
 
 async def template_builder(state: AgentBuilderState) -> dict:
@@ -99,7 +104,12 @@ async def template_builder(state: AgentBuilderState) -> dict:
         # Add status
         result["status"] = "ready_for_user_approval"
 
-        logger.info(f"  Template: {result.get('project_type')} with {len(result.get('agents', []))} agent(s)")
+        result["project_type"] = "single_agent"
+        if len(result.get("agents", [])) > 1:
+            result["agents"] = result["agents"][:1]
+            logger.warning("  LLM returned multiple agents — trimmed to first one")
+
+        logger.info(f"  Template: single_agent — {result['agents'][0].get('agent_name', '?')}" if result.get("agents") else "  Template: empty")
         return {"final_template": result}
 
     except Exception as e:
@@ -123,17 +133,28 @@ async def template_builder(state: AgentBuilderState) -> dict:
                     "tools_provided": m.get("tools_provided", []),
                 })
         
+        mcp_names = [m.get("mcp_name", "") for m in full_mcps if m.get("mcp_name")]
+        skill_ids = [s["skill_id"] for s in selected_skills]
+        tools_note = ""
+        if mcp_names:
+            tools_note += f" You have access to these MCP tools: {', '.join(mcp_names)}."
+        if skill_ids:
+            tools_note += f" You are equipped with these skills: {', '.join(skill_ids)}."
+
         fallback = {
             "project_type": "single_agent",
             "agents": [{
                 "agent_name": "AI_Assistant",
                 "assigned_openrouter_model": default_model,
                 "selected_mcps": full_mcps,
-                "selected_skills": [s["skill_id"] for s in selected_skills],
-                "system_prompt": f"You are a highly capable AI assistant. Your task: {user_query}\n\nYou have access to the following tools and should use them to complete the task effectively.",
+                "selected_skills": skill_ids,
+                "system_prompt": (
+                    f"You are an AI assistant focused on completing this task: {user_query}."
+                    f"{tools_note}"
+                    " Analyze the task carefully, use your tools when needed, and provide clear, actionable results."
+                ),
                 "sub_task": user_query,
             }],
-            "execution_order": "sequential",
             "status": "ready_for_user_approval",
             "warning": f"Template built with fallback due to error: {str(e)}",
         }

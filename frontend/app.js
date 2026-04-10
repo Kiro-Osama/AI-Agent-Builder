@@ -117,10 +117,10 @@ function showPipelineSection(taskId) {
     document.getElementById('resultSection').classList.add('hidden');
     document.getElementById('taskIdDisplay').textContent = `Task: ${taskId}`;
 
-    // Reset all nodes
     document.querySelectorAll('.node').forEach(n => {
         n.classList.remove('active', 'completed');
     });
+    document.querySelectorAll('.node-details').forEach(el => { el.innerHTML = ''; });
 
     document.getElementById('progressBar').style.width = '0%';
     document.getElementById('progressLabel').textContent = '0%';
@@ -183,6 +183,112 @@ function updatePipelineUI(data) {
             }
         }
     });
+
+    renderNodeDetails(data.processing_log || []);
+}
+
+function renderNodeDetails(logs) {
+    for (const entry of logs) {
+        if (!entry.details || entry.node === 'pipeline') continue;
+        const el = document.getElementById(`details-${entry.node}`);
+        if (!el) continue;
+
+        const d = entry.details;
+        let html = '';
+
+        switch (entry.node) {
+            case 'query_analyzer':
+                if (d.sub_queries && d.sub_queries.length) {
+                    html = `<div class="detail-label">${escapeHtml(d.summary)}</div>` +
+                        d.sub_queries.map(q => `<span class="detail-tag query-tag">${escapeHtml(q)}</span>`).join('');
+                }
+                break;
+
+            case 'similarity_retriever':
+                html = `<div class="detail-label">${escapeHtml(d.summary)}</div>`;
+                if (d.mcps_found && d.mcps_found.length) {
+                    html += '<div class="detail-group"><span class="detail-group-title">MCPs:</span>' +
+                        d.mcps_found.map(m =>
+                            `<span class="detail-tag mcp-tag">${escapeHtml(m.name)} <small>${(m.similarity * 100).toFixed(0)}%</small></span>`
+                        ).join('') + '</div>';
+                }
+                if (d.skills_found && d.skills_found.length) {
+                    html += '<div class="detail-group"><span class="detail-group-title">Skills:</span>' +
+                        d.skills_found.map(s =>
+                            `<span class="detail-tag skill-tag">${escapeHtml(s.name || s.id)} <small>${(s.similarity * 100).toFixed(0)}%</small></span>`
+                        ).join('') + '</div>';
+                }
+                break;
+
+            case 'needs_assessment':
+                html = `<div class="detail-label">${escapeHtml(d.summary)}</div>`;
+                if (d.action === 'create_skill' && d.missing_capabilities && d.missing_capabilities.length) {
+                    html += '<div class="detail-group"><span class="detail-group-title">Missing:</span>' +
+                        d.missing_capabilities.map(c =>
+                            `<span class="detail-tag missing-tag">${escapeHtml(c)}</span>`
+                        ).join('') + '</div>';
+                }
+                break;
+
+            case 'skill_creator':
+                html = `<div class="detail-label">${escapeHtml(d.summary)}</div>`;
+                if (d.created_skills && d.created_skills.length) {
+                    html += d.created_skills.map(s =>
+                        `<div class="detail-created-skill">
+                            <strong>${escapeHtml(s.name)}</strong>
+                            <span class="detail-skill-desc">${escapeHtml(s.description)}</span>
+                        </div>`
+                    ).join('');
+                }
+                break;
+
+            case 'sandbox_validator':
+                html = `<div class="detail-label">${escapeHtml(d.summary)}</div>`;
+                break;
+
+            case 'ai_final_filter':
+                html = `<div class="detail-label">${escapeHtml(d.summary)}</div>`;
+                if (d.selected_mcps && d.selected_mcps.length) {
+                    html += '<div class="detail-group"><span class="detail-group-title">MCPs:</span>' +
+                        d.selected_mcps.map(n => `<span class="detail-tag mcp-tag selected">${escapeHtml(n)}</span>`).join('') + '</div>';
+                }
+                if (d.selected_skills && d.selected_skills.length) {
+                    html += '<div class="detail-group"><span class="detail-group-title">Skills:</span>' +
+                        d.selected_skills.map(n => `<span class="detail-tag skill-tag selected">${escapeHtml(n)}</span>`).join('') + '</div>';
+                }
+                break;
+
+            case 'docker_mcp_runner':
+                html = `<div class="detail-label">${escapeHtml(d.summary)}</div>`;
+                if (d.mcps && d.mcps.length) {
+                    html += d.mcps.map(m =>
+                        `<div class="detail-docker-item">
+                            <span class="detail-tag mcp-tag">${escapeHtml(m.name)}</span>
+                            <code>${escapeHtml(m.image)}</code>
+                        </div>`
+                    ).join('');
+                }
+                break;
+
+            case 'template_builder':
+                html = `<div class="detail-label">${escapeHtml(d.summary)}</div>`;
+                if (d.agent_name && d.agent_name !== '?') {
+                    html += `<div class="detail-agent-item">
+                        <strong>${escapeHtml(d.agent_name)}</strong>
+                        <code>${escapeHtml(d.model || '?')}</code>
+                        <small>${d.mcps_count || 0} MCPs · ${d.skills_count || 0} skills</small>
+                    </div>`;
+                }
+                if (d.has_warning) html += '<div class="detail-warning">Built with fallback template</div>';
+                break;
+
+            case 'final_output':
+                html = `<div class="detail-label">${escapeHtml(d.summary)}</div>`;
+                break;
+        }
+
+        if (html) el.innerHTML = html;
+    }
 }
 
 // -----------------------------------------------

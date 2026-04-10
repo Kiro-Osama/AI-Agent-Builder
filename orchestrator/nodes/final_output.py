@@ -22,7 +22,7 @@ async def final_output(state: AgentBuilderState) -> dict:
     if not template.get("agents"):
         logger.warning("  Template has no agents, creating minimal output")
         template = {
-            "project_type": "error",
+            "project_type": "single_agent",
             "agents": [],
             "status": "failed",
             "errors": state.get("errors", ["No agents were configured"]),
@@ -41,7 +41,8 @@ async def final_output(state: AgentBuilderState) -> dict:
         "errors": state.get("errors", []),
     }
 
-    logger.info(f"  ✅ Template finalized: {template.get('project_type')}")
+    agent_name = template["agents"][0].get("agent_name", "?") if template.get("agents") else "none"
+    logger.info(f"  ✅ Template finalized: agent={agent_name}")
     return {
         "final_template": template,
         "status": "completed",

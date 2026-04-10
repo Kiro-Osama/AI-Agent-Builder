@@ -65,7 +65,7 @@ class SkillInfo(BaseModel):
 
 class AgentTemplate(BaseModel):
     """The final agent configuration template."""
-    project_type: str = "single_agent"  # single_agent | multi_agent
+    project_type: str = "single_agent"
     agents: list[dict] = Field(default_factory=list)
     status: str = "ready_for_user_approval"
 

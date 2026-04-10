@@ -179,13 +179,117 @@ def run_build_pipeline(
         raise
 
 
+def _extract_node_details(node_name: str, node_state: dict, accumulated: dict) -> dict:
+    """Extract human-readable details from a node's output for the progress log."""
+    details = {}
+
+    if node_name == "query_analyzer":
+        sq = node_state.get("sub_queries", [])
+        details = {
+            "summary": f"Generated {len(sq)} search queries",
+            "sub_queries": sq[:6],
+        }
+
+    elif node_name == "similarity_retriever":
+        mcps = node_state.get("retrieved_mcps", [])
+        skills = node_state.get("retrieved_skills", [])
+        details = {
+            "summary": f"Found {len(mcps)} MCPs and {len(skills)} skills",
+            "mcps_found": [
+                {"name": m.get("mcp_name", "?"), "similarity": round(m.get("similarity", 0), 3)}
+                for m in mcps[:8]
+            ],
+            "skills_found": [
+                {"id": s.get("skill_id", "?"), "name": s.get("skill_name", "?"),
+                 "similarity": round(s.get("similarity", 0), 3)}
+                for s in sorted(skills, key=lambda x: x.get("similarity", 0), reverse=True)[:8]
+            ],
+        }
+
+    elif node_name == "needs_assessment":
+        action = node_state.get("needs_action", "proceed")
+        missing = node_state.get("missing_capabilities", [])
+        details = {
+            "summary": "Creating new skill" if action == "create_skill" else "Existing tools sufficient",
+            "action": action,
+            "missing_capabilities": missing,
+        }
+
+    elif node_name == "skill_creator":
+        new_skills = node_state.get("new_skills", [])
+        details = {
+            "summary": f"Created {len(new_skills)} new skill(s)" if new_skills else "No new skills needed",
+            "created_skills": [
+                {"id": s.get("skill_id", "?"), "name": s.get("skill_name", "?"),
+                 "description": (s.get("description") or "")[:150]}
+                for s in new_skills
+            ],
+        }
+
+    elif node_name == "sandbox_validator":
+        validated = node_state.get("validated_skills", [])
+        details = {
+            "summary": f"{len(validated)} skills validated and ready",
+            "validated_count": len(validated),
+        }
+
+    elif node_name == "ai_final_filter":
+        tools = node_state.get("selected_tools", {})
+        sel_mcps = tools.get("mcps", [])
+        sel_skills = tools.get("skills", [])
+        details = {
+            "summary": f"Selected {len(sel_mcps)} MCPs and {len(sel_skills)} skills",
+            "selected_mcps": [m.get("mcp_name", "?") for m in sel_mcps],
+            "selected_skills": [s.get("skill_id", "?") for s in sel_skills],
+        }
+
+    elif node_name == "docker_mcp_runner":
+        running = node_state.get("running_mcps", [])
+        details = {
+            "summary": f"{len(running)} MCP container(s) prepared",
+            "mcps": [
+                {"name": m.get("mcp_name", "?"), "image": m.get("docker_image", "?"),
+                 "status": m.get("status", "ready")}
+                for m in running
+            ],
+        }
+
+    elif node_name == "template_builder":
+        tmpl = node_state.get("final_template", {})
+        agent = tmpl.get("agents", [{}])[0] if tmpl.get("agents") else {}
+        details = {
+            "summary": f"Agent '{agent.get('agent_name', '?')}' configured" if agent else "No agent configured",
+            "agent_name": agent.get("agent_name", "?"),
+            "model": agent.get("assigned_openrouter_model", "?"),
+            "mcps_count": len(agent.get("selected_mcps", [])),
+            "skills_count": len(agent.get("selected_skills", [])),
+            "has_warning": bool(tmpl.get("warning")),
+        }
+
+    elif node_name == "final_output":
+        errors = node_state.get("errors") or accumulated.get("errors", [])
+        details = {
+            "summary": "Pipeline complete" + (f" with {len(errors)} warning(s)" if errors else ""),
+            "total_errors": len(errors) if errors else 0,
+        }
+
+    return details
+
+
 async def _run_graph_async(graph, initial_state: dict, task_id: str) -> dict:
-    """Run the LangGraph pipeline asynchronously."""
+    """Run the LangGraph pipeline asynchronously with detailed progress."""
+    accumulated_state = dict(initial_state)
     final_state = None
+
     async for state in graph.astream(initial_state):
-        # state is a dict with the node name as key
         for node_name, node_state in state.items():
-            logger.info(f"  Node completed: {node_name}")
+            logger.info("  Node completed: %s", node_name)
+
+            if isinstance(node_state, dict):
+                accumulated_state.update(node_state)
+
+            details = _extract_node_details(node_name, node_state if isinstance(node_state, dict) else {}, accumulated_state)
+
             update_build_status(
                 task_id=task_id,
                 status="processing",
@@ -193,7 +297,8 @@ async def _run_graph_async(graph, initial_state: dict, task_id: str) -> dict:
                 log_entry={
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "node": node_name,
-                    "message": f"Node '{node_name}' completed",
+                    "message": details.get("summary", f"Node '{node_name}' completed"),
+                    "details": details,
                 },
             )
             final_state = node_state
