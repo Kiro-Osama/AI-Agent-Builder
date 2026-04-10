@@ -1,5 +1,7 @@
-# Worker dependencies — references shared base
--r /app/requirements/base.txt
+# ============================================
+# Worker-specific dependencies
+# ============================================
+-r base.txt
 
 # Docker SDK (for sandbox validation)
 docker==7.1.0

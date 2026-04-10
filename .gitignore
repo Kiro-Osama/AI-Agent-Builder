@@ -1,14 +1,23 @@
 # Environment
 .env
+.env.local
 
 # Python
 __pycache__/
+**/__pycache__/
 *.py[cod]
+*.pyo
 *.egg-info/
+*.egg
 dist/
 build/
 .venv/
 venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
 
 # Docker
 docker-compose.override.yml
@@ -16,14 +25,27 @@ docker-compose.override.yml
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.cursor/
 
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-# Skills output
-skills/*
+# Skills data (imported at runtime)
+skills/skills/
 !skills/.gitkeep
 
 # Logs
 *.log
+logs/
+
+# Agent transcripts & terminals (Cursor-managed)
+agent-transcripts/
+terminals/
+
+# MCP descriptors (Cursor-managed)
+mcps/

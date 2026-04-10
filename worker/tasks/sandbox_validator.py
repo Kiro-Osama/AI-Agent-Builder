@@ -22,10 +22,11 @@ if not _SYNC_DB_URL:
         "ALEMBIC_DATABASE_URL is required for sandbox_validator (sync PostgreSQL URL)."
     )
 
+_engine = create_engine(_SYNC_DB_URL, pool_pre_ping=True, pool_size=2, max_overflow=2)
+
 
 def get_sync_session() -> Session:
-    engine = create_engine(_SYNC_DB_URL)
-    return Session(engine)
+    return Session(_engine)
 
 
 @app.task(bind=True, name="worker.tasks.sandbox_validator.validate_skill")
@@ -76,10 +77,10 @@ def validate_skill(self, skill_id: str) -> dict:
                 session.commit()
                 return {"success": False, "error": "No code or schema"}
 
-        # Run in sandbox
-        from core.docker_manager import docker_manager
+        from core.docker_manager import get_docker_manager
 
-        # Write code to temp file in skills dir
+        docker_mgr = get_docker_manager()
+
         skills_dir = os.getenv("SKILLS_DIR", "/app/skills")
         skill_dir = os.path.join(skills_dir, skill_id)
         os.makedirs(skill_dir, exist_ok=True)
@@ -88,8 +89,7 @@ def validate_skill(self, skill_id: str) -> dict:
         with open(code_path, "w") as f:
             f.write(code)
 
-        # Test execution in sandbox
-        result = docker_manager.run_sandbox(
+        result = docker_mgr.run_sandbox(
             image=execution_env,
             command=f"python /skill/main.py --test",
             timeout=30,

@@ -15,7 +15,8 @@ COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 WORKDIR /app
 ENV PYTHONPATH=/app
 
-# Copy requirements and install
+# Copy requirements (shared base + API-specific) and install
+COPY requirements/ /app/requirements/
 COPY api/requirements.txt /app/api/requirements.txt
 RUN pip install --no-cache-dir -r /app/api/requirements.txt
 
