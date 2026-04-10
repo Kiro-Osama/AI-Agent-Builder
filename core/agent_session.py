@@ -36,6 +36,7 @@ class AgentSession:
         self.containers: list[MCPContainerSession] = []
         self.all_tools: list[dict] = []  # MCP-format tools from all containers
         self.tool_to_container: dict[str, MCPContainerSession] = {}
+        self._tool_original_name: dict[str, str] = {}  # prefixed → original MCP name
         self.active: bool = False
         self.errors: list[str] = []
 
@@ -88,18 +89,18 @@ class AgentSession:
 
                 # Register tools
                 for tool in tools:
-                    tool_name = tool["name"]
-                    # Prefix with MCP name if there's a conflict
-                    if tool_name in self.tool_to_container:
-                        prefixed = f"{mcp_name}__{tool_name}"
+                    original_name = tool["name"]
+                    registered_name = original_name
+                    if original_name in self.tool_to_container:
+                        registered_name = f"{mcp_name}__{original_name}"
                         logger.warning(
-                            f"[Session:{self.session_id}] Tool name conflict: {tool_name}, "
-                            f"prefixing as {prefixed}"
+                            f"[Session:{self.session_id}] Tool name conflict: {original_name}, "
+                            f"prefixing as {registered_name}"
                         )
-                        tool["name"] = prefixed
-                        tool_name = prefixed
+                        tool["name"] = registered_name
 
-                    self.tool_to_container[tool_name] = container
+                    self.tool_to_container[registered_name] = container
+                    self._tool_original_name[registered_name] = original_name
                     self.all_tools.append(tool)
 
                 self.containers.append(container)
@@ -136,28 +137,24 @@ class AgentSession:
     async def call_tool(self, tool_name: str, arguments: dict) -> str:
         """
         Route a tool call to the correct MCP container.
-        
-        Args:
-            tool_name: Name of the tool to call
-            arguments: Tool arguments
-
-        Returns:
-            Tool result as string
+        Uses the original (un-prefixed) tool name for the actual RPC call.
         """
         container = self.tool_to_container.get(tool_name)
         if not container:
             available = list(self.tool_to_container.keys())
             return f"Error: Tool '{tool_name}' not found. Available: {available}"
 
+        rpc_name = self._tool_original_name.get(tool_name, tool_name)
+
         try:
-            result = await container.call_tool(tool_name, arguments)
+            result = await container.call_tool(rpc_name, arguments)
             return result
         except MCPError as e:
             logger.error(f"[Session:{self.session_id}] Tool error {tool_name}: {e}")
             return f"Error executing {tool_name}: {e}"
         except Exception as e:
             logger.error(f"[Session:{self.session_id}] Unexpected tool error {tool_name}: {e}")
-            return f"Unexpected error in {tool_name}: {e}"
+            return f"Error executing {tool_name}: {e}"
 
     def get_tool_names(self) -> list[str]:
         """Get list of all available tool names."""

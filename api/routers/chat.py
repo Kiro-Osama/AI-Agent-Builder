@@ -130,6 +130,12 @@ async def chat_with_agent(
             except Exception as e:
                 logger.error(f"[Chat] Failed to start MCP session: {e}")
 
+            if agent_session.errors and not agent_session.containers:
+                raise HTTPException(
+                    503,
+                    f"All MCP tools failed to start: {'; '.join(agent_session.errors)}"
+                )
+
     if request.model:
         model = request.model
     else:

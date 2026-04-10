@@ -62,17 +62,28 @@ async def dispatch_build_task(
     )
     await db.commit()
 
-    celery_app.send_task(
-        "worker.tasks.build_agent.run_build_pipeline",
-        kwargs={
-            "query": query,
-            "preferred_model": preferred_model,
-            "max_mcps": max_mcps,
-            "enable_skill_creation": enable_skill_creation,
-        },
-        task_id=task_id,
-        queue="build",
-    )
+    try:
+        celery_app.send_task(
+            "worker.tasks.build_agent.run_build_pipeline",
+            kwargs={
+                "query": query,
+                "preferred_model": preferred_model,
+                "max_mcps": max_mcps,
+                "enable_skill_creation": enable_skill_creation,
+            },
+            task_id=task_id,
+            queue="build",
+        )
+    except Exception as e:
+        logger.error(f"Celery broker unreachable for task {task_id}: {e}")
+        from sqlalchemy import update
+        await db.execute(
+            update(BuildHistory)
+            .where(BuildHistory.task_id == task_id)
+            .values(status="failed", current_node="error")
+        )
+        await db.commit()
+        raise RuntimeError(f"Task queue unavailable: {e}") from e
 
     logger.info(f"Dispatched build task: {task_id}")
     return task_id

@@ -60,7 +60,12 @@ class OpenRouterClient:
 
     def __init__(self):
         self.base_url = OPENROUTER_BASE_URL
-        self.api_keys = list(_API_KEYS) if _API_KEYS else [OPENROUTER_API_KEY]
+        self.api_keys = [k for k in _API_KEYS if k.strip()] if _API_KEYS else []
+        if not self.api_keys:
+            logger.warning(
+                "No OpenRouter API keys configured. Set OPENROUTER_API_KEY in .env. "
+                "LLM calls will fail."
+            )
         self._current_key_idx = 0
 
     def _make_headers(self, api_key: str) -> dict:
@@ -86,6 +91,11 @@ class OpenRouterClient:
         2. Model fallback chain (on 429 per-model or 400 invalid model)
         3. Exponential backoff retry per model
         """
+        if not self.api_keys:
+            raise RuntimeError(
+                "No OpenRouter API keys configured. Set OPENROUTER_API_KEY in .env"
+            )
+
         primary_model = model or DEFAULT_CHAT_MODEL
 
         models_to_try = [primary_model]
@@ -267,10 +277,13 @@ class OpenRouterClient:
 
     async def get_available_models(self) -> list[dict]:
         """Fetch list of available models from OpenRouter."""
+        if not self.api_keys:
+            return []
+        headers = self._make_headers(self.api_keys[0])
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"{self.base_url}/models",
-                headers=self.headers,
+                headers=headers,
             )
             response.raise_for_status()
             return response.json().get("data", [])

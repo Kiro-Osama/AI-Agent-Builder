@@ -23,11 +23,12 @@ if not _SYNC_DB_URL:
         "ALEMBIC_DATABASE_URL is required for the worker (sync URL, e.g. postgresql://user:pass@db:5432/dbname)."
     )
 
+_engine = create_engine(_SYNC_DB_URL, pool_pre_ping=True, pool_size=5, max_overflow=5)
+
 
 def get_sync_session() -> Session:
-    """Create a sync database session for Celery tasks."""
-    engine = create_engine(_SYNC_DB_URL)
-    return Session(engine)
+    """Create a sync database session for Celery tasks (reuses shared engine)."""
+    return Session(_engine)
 
 
 def update_build_status(

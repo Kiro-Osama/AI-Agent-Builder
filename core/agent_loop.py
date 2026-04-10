@@ -134,26 +134,26 @@ async def run_agent_loop(
         message = choice.get("message", {})
         finish_reason = choice.get("finish_reason", "")
 
-        # Check for tool calls
         tool_calls = message.get("tool_calls")
 
-        if tool_calls and finish_reason != "stop":
-            # LLM wants to call tools
+        if tool_calls:
             logger.info(
-                f"[AgentLoop] LLM requested {len(tool_calls)} tool call(s)"
+                f"[AgentLoop] LLM requested {len(tool_calls)} tool call(s) "
+                f"(finish_reason={finish_reason})"
             )
 
-            # Add the assistant message (with tool_calls) to history
             messages.append(message)
 
             for tool_call in tool_calls:
                 fn = tool_call.get("function", {})
                 tool_name = fn.get("name", "")
                 
-                # Parse arguments
                 try:
                     arguments = json.loads(fn.get("arguments", "{}"))
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as parse_err:
+                    logger.warning(
+                        f"[AgentLoop] Bad JSON args for {tool_name}: {parse_err} — raw: {fn.get('arguments', '')[:200]}"
+                    )
                     arguments = {}
                 
                 tool_call_id = tool_call.get("id", f"call_{iteration}")
@@ -161,21 +161,23 @@ async def run_agent_loop(
                 logger.info(f"[AgentLoop] 🔧 {tool_name}({json.dumps(arguments)[:150]})")
 
                 # Execute tool via MCP session
+                tool_success = True
                 try:
                     result = await session.call_tool(tool_name, arguments)
-                    # Truncate very long results to prevent context overflow
+                    if result.startswith("Error") or result.startswith("Error:"):
+                        tool_success = False
                     if len(result) > 10000:
                         result = result[:10000] + f"\n\n... (truncated, {len(result)} total chars)"
                 except Exception as e:
-                    result = f"Tool execution error: {str(e)}"
+                    result = f"Error: Tool execution failed: {str(e)}"
+                    tool_success = False
 
-                # Log the tool call
                 tool_calls_log.append({
                     "iteration": iteration,
                     "tool": tool_name,
                     "args": arguments,
-                    "result": result[:500],  # Truncated for the log
-                    "success": not result.startswith("Error"),
+                    "result": result[:500],
+                    "success": tool_success,
                 })
 
                 logger.info(f"[AgentLoop] 📋 Result: {result[:200]}...")

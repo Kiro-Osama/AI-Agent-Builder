@@ -23,10 +23,11 @@ if not _SYNC_DB_URL:
         "ALEMBIC_DATABASE_URL is required for the LangGraph pipeline (sync PostgreSQL URL)."
     )
 
+_engine = create_engine(_SYNC_DB_URL, pool_pre_ping=True, pool_size=3, max_overflow=3)
+
 
 def _get_session() -> Session:
-    engine = create_engine(_SYNC_DB_URL)
-    return Session(engine)
+    return Session(_engine)
 
 
 async def similarity_retriever(state: AgentBuilderState) -> dict:

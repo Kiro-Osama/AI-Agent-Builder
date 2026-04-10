@@ -26,6 +26,8 @@ if not _SYNC_DB_URL:
         "ALEMBIC_DATABASE_URL is required for skill_creator (sync PostgreSQL URL)."
     )
 
+_engine = create_engine(_SYNC_DB_URL, pool_pre_ping=True, pool_size=3, max_overflow=3)
+
 # --------------------------------------------------------------------------
 # Compact methodology — safe for string operations (no braces from examples)
 # --------------------------------------------------------------------------
@@ -46,8 +48,7 @@ def _load_methodology_brief() -> str:
     Falls back to _METHODOLOGY_BRIEF if DB is unavailable or empty.
     """
     try:
-        engine = create_engine(_SYNC_DB_URL)
-        with Session(engine) as session:
+        with Session(_engine) as session:
             row = session.execute(
                 select(Skill.system_prompt).where(Skill.skill_id == "skill-creator")
             ).scalar_one_or_none()
@@ -174,7 +175,6 @@ async def skill_creator(state: AgentBuilderState) -> dict:
         "⚒️ Node 4: Creating %d new skills...", len(missing_capabilities)
     )
     new_skills = []
-    engine = create_engine(_SYNC_DB_URL)
 
     for capability in missing_capabilities:
         try:
@@ -219,7 +219,7 @@ async def skill_creator(state: AgentBuilderState) -> dict:
             }
 
             # Upsert via raw SQL (avoids ORM mapped-column issues)
-            with Session(engine) as session:
+            with Session(_engine) as session:
                 try:
                     session.execute(
                         text("""
