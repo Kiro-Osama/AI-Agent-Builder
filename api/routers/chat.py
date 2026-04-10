@@ -46,7 +46,8 @@ DEFAULT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "openrouter/free")
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
-    model: str | None = None  # Override model
+    model: str | None = None
+    mcp_configs: dict[str, dict] | None = None  # {mcp_name: {KEY: value}}
 
 
 class ToolCallInfo(BaseModel):
@@ -117,7 +118,7 @@ async def chat_with_agent(
 
     agent_session = get_session(key)
     if not agent_session:
-        agent_session = create_session(key)
+        agent_session = create_session(key, mcp_user_configs=request.mcp_configs)
         selected_mcps = config.get("selected_mcps", [])
 
         if selected_mcps:
@@ -187,6 +188,14 @@ async def get_agent_info(task_id: str, db: AsyncSession = Depends(get_db)):
     agents = template.get("agents", [])
     agent = agents[0] if agents else {}
 
+    config_required = []
+    for mcp in agent.get("selected_mcps", []):
+        if mcp.get("requires_user_config"):
+            config_required.append({
+                "mcp_name": mcp.get("mcp_name"),
+                "config_schema": mcp.get("config_schema", []),
+            })
+
     return {
         "task_id": task_id,
         "agent_name": agent.get("agent_name", "AI_Assistant"),
@@ -196,6 +205,7 @@ async def get_agent_info(task_id: str, db: AsyncSession = Depends(get_db)):
         "selected_skills": agent.get("selected_skills", []),
         "project_type": template.get("project_type", "single_agent"),
         "user_query": build.user_query,
+        "config_required": config_required,
     }
 
 

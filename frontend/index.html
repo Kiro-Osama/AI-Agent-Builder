@@ -57,52 +57,110 @@
         <section class="section build-section" id="buildSection">
             <div class="section-header">
                 <h2>🏗️ Build New Agent</h2>
-                <p class="subtitle">Describe the task. The system will find the right MCPs, create skills, and build your agent.</p>
+                <div class="section-header-actions">
+                    <a href="/admin.html" class="btn-secondary btn-sm">Admin Panel</a>
+                </div>
             </div>
 
-            <div class="build-form">
-                <div class="textarea-wrapper">
-                    <textarea
-                        id="queryInput"
-                        placeholder="Example: I need an agent that can scan a website for vulnerabilities and generate a detailed security report..."
-                        rows="4"
-                    ></textarea>
-                    <div class="char-count"><span id="charCount">0</span>/5000</div>
-                </div>
+            <div class="build-tabs">
+                <button class="build-tab active" onclick="switchBuildTab('ai')" id="tabAI">AI Build</button>
+                <button class="build-tab" onclick="switchBuildTab('manual')" id="tabManual">Manual Build</button>
+            </div>
 
-                <div class="form-options">
-                    <div class="option-group">
-                        <label>Model Preference</label>
-                        <select id="modelSelect">
-                            <option value="">Auto-select (recommended) [Uses .env setting]</option>
-                            <option value="nvidia/nemotron-3-super-120b-a12b:free">Nvidia Nemotron 3 (Free)</option>
-                            <option value="google/gemini-2.0-flash-lite-preview-02-05:free">Gemini 2.0 Flash Lite (Free)</option>
-                            <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (Free)</option>
-                            <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-                            <option value="openai/gpt-4o">GPT-4o</option>
-                        </select>
+            <!-- AI Build -->
+            <div class="build-tab-content" id="aiBuildContent">
+                <p class="subtitle">Describe the task. The system will find the right MCPs, create skills, and build your agent.</p>
+                <div class="build-form">
+                    <div class="textarea-wrapper">
+                        <textarea
+                            id="queryInput"
+                            placeholder="Example: I need an agent that can scan a website for vulnerabilities and generate a detailed security report..."
+                            rows="4"
+                        ></textarea>
+                        <div class="char-count"><span id="charCount">0</span>/5000</div>
                     </div>
-                    <div class="option-group">
-                        <label>Max MCPs</label>
-                        <select id="maxMcps">
-                            <option value="3">3</option>
-                            <option value="5" selected>5</option>
-                            <option value="10">10</option>
-                        </select>
+                    <div class="form-options">
+                        <div class="option-group">
+                            <label>Model Preference</label>
+                            <select id="modelSelect">
+                                <option value="">Auto-select (recommended)</option>
+                                <option value="google/gemma-3-27b-it:free">Gemma 3 27B (Free)</option>
+                                <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (Free)</option>
+                                <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+                                <option value="openai/gpt-4o">GPT-4o</option>
+                            </select>
+                        </div>
+                        <div class="option-group">
+                            <label>Max MCPs</label>
+                            <select id="maxMcps">
+                                <option value="3">3</option>
+                                <option value="5" selected>5</option>
+                                <option value="10">10</option>
+                            </select>
+                        </div>
+                        <div class="option-group toggle-group">
+                            <label>Skill Creation</label>
+                            <label class="toggle">
+                                <input type="checkbox" id="enableSkills" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
                     </div>
-                    <div class="option-group toggle-group">
-                        <label>Skill Creation</label>
-                        <label class="toggle">
-                            <input type="checkbox" id="enableSkills" checked>
-                            <span class="toggle-slider"></span>
-                        </label>
-                    </div>
+                    <button class="btn-build" id="buildBtn" onclick="submitBuild()">
+                        <span class="btn-icon">⚡</span>
+                        <span>Build Agent</span>
+                    </button>
                 </div>
+            </div>
 
-                <button class="btn-build" id="buildBtn" onclick="submitBuild()">
-                    <span class="btn-icon">⚡</span>
-                    <span>Build Agent</span>
-                </button>
+            <!-- Manual Build -->
+            <div class="build-tab-content hidden" id="manualBuildContent">
+                <p class="subtitle">Build an agent manually by selecting MCPs, skills, and writing a system prompt.</p>
+                <div class="build-form">
+                    <div class="form-options" style="margin-bottom:12px;">
+                        <div class="option-group" style="flex:2;">
+                            <label>Agent Name</label>
+                            <input type="text" id="manualAgentName" value="Custom_Agent" placeholder="My Agent" style="padding:10px 14px;background:var(--bg-glass);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:0.9rem;outline:none;width:100%;">
+                        </div>
+                        <div class="option-group">
+                            <label>Model</label>
+                            <select id="manualModel">
+                                <option value="google/gemma-3-27b-it:free">Gemma 3 27B (Free)</option>
+                                <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (Free)</option>
+                                <option value="qwen/qwen3-30b-a3b:free">Qwen3 30B (Free)</option>
+                                <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+                                <option value="openai/gpt-4o">GPT-4o</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="textarea-wrapper">
+                        <label style="font-size:0.78rem;font-weight:500;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:4px;">System Prompt</label>
+                        <textarea
+                            id="manualSystemPrompt"
+                            placeholder="You are a helpful AI assistant. Use your tools when needed to complete tasks."
+                            rows="4"
+                        >You are a helpful AI assistant. Use your tools when needed to complete tasks.</textarea>
+                    </div>
+
+                    <div class="manual-picker-row">
+                        <div class="manual-picker">
+                            <label style="font-size:0.78rem;font-weight:500;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:8px;">Select MCPs</label>
+                            <input type="text" id="mcpSearchManual" placeholder="Search MCPs..." class="picker-search" oninput="filterManualMCPs()">
+                            <div class="picker-list" id="manualMCPList"></div>
+                        </div>
+                        <div class="manual-picker">
+                            <label style="font-size:0.78rem;font-weight:500;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:8px;">Select Skills</label>
+                            <input type="text" id="skillSearchManual" placeholder="Search skills..." class="picker-search" oninput="filterManualSkills()">
+                            <div class="picker-list" id="manualSkillList"></div>
+                        </div>
+                    </div>
+
+                    <button class="btn-build" id="manualBuildBtn" onclick="submitManualBuild()">
+                        <span class="btn-icon">🔧</span>
+                        <span>Build Agent (Manual)</span>
+                    </button>
+                </div>
             </div>
         </section>
 

@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 from core.mcp_client import MCPContainerSession, MCPError
+from core.shared_mcp_pool import shared_pool
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +31,17 @@ class AgentSession:
         3. cleanup() → stops all containers
     """
 
-    def __init__(self, session_id: str = ""):
+    def __init__(self, session_id: str = "", mcp_user_configs: dict[str, dict] | None = None):
         self.session_id = session_id
         self.created_at: float = time.time()
         self.containers: list[MCPContainerSession] = []
-        self.all_tools: list[dict] = []  # MCP-format tools from all containers
+        self._owned_containers: list[MCPContainerSession] = []  # only per-session ones
+        self.all_tools: list[dict] = []
         self.tool_to_container: dict[str, MCPContainerSession] = {}
-        self._tool_original_name: dict[str, str] = {}  # prefixed → original MCP name
+        self._tool_original_name: dict[str, str] = {}
         self.active: bool = False
         self.errors: list[str] = []
+        self.mcp_user_configs = mcp_user_configs or {}
 
     async def start(self, selected_mcps: list[dict]) -> list[dict]:
         """
@@ -66,28 +69,42 @@ class AgentSession:
             mcp_name = mcp_config.get("mcp_name", "unknown")
             docker_image = mcp_config.get("docker_image", "")
             run_config = mcp_config.get("run_config", {}) or {}
+            requires_user_config = mcp_config.get("requires_user_config", False)
 
             if not docker_image:
                 self.errors.append(f"{mcp_name}: no docker_image specified")
                 continue
 
-            container = MCPContainerSession()
             try:
-                # Start the container
-                await container.start(
-                    docker_image=docker_image,
-                    run_config=run_config,
-                    workspace_path=workspace,
-                    mcp_name=mcp_name,
-                )
+                if not requires_user_config:
+                    container = await shared_pool.get_or_start(
+                        mcp_name=mcp_name,
+                        docker_image=docker_image,
+                        run_config=run_config,
+                        workspace_path=workspace,
+                    )
+                    tools = container.tools
+                    is_shared = True
+                else:
+                    effective_config = dict(run_config)
+                    user_vals = self.mcp_user_configs.get(mcp_name, {})
+                    if user_vals:
+                        env = dict(effective_config.get("environment", {}))
+                        env.update(user_vals)
+                        effective_config["environment"] = env
 
-                # Initialize MCP protocol
-                await container.initialize()
+                    container = MCPContainerSession()
+                    await container.start(
+                        docker_image=docker_image,
+                        run_config=effective_config,
+                        workspace_path=workspace,
+                        mcp_name=mcp_name,
+                    )
+                    await container.initialize()
+                    tools = await container.list_tools()
+                    self._owned_containers.append(container)
+                    is_shared = False
 
-                # Discover tools
-                tools = await container.list_tools()
-
-                # Register tools
                 for tool in tools:
                     original_name = tool["name"]
                     registered_name = original_name
@@ -97,6 +114,7 @@ class AgentSession:
                             f"[Session:{self.session_id}] Tool name conflict: {original_name}, "
                             f"prefixing as {registered_name}"
                         )
+                        tool = dict(tool)
                         tool["name"] = registered_name
 
                     self.tool_to_container[registered_name] = container
@@ -104,22 +122,20 @@ class AgentSession:
                     self.all_tools.append(tool)
 
                 self.containers.append(container)
+                tag = "shared" if is_shared else "per-session"
                 logger.info(
-                    f"[Session:{self.session_id}] ✅ {mcp_name}: {len(tools)} tools ready"
+                    f"[Session:{self.session_id}] ✅ {mcp_name} ({tag}): {len(tools)} tools ready"
                 )
 
             except MCPError as e:
                 error_msg = f"{mcp_name}: {e}"
                 self.errors.append(error_msg)
                 logger.error(f"[Session:{self.session_id}] ❌ {error_msg}")
-                # Clean up failed container
-                await container.stop()
 
             except Exception as e:
                 error_msg = f"{mcp_name}: unexpected error: {e}"
                 self.errors.append(error_msg)
                 logger.error(f"[Session:{self.session_id}] ❌ {error_msg}")
-                await container.stop()
 
         self.active = True
         logger.info(
@@ -169,20 +185,20 @@ class AgentSession:
         return "\n".join(lines) if lines else "No MCPs connected"
 
     async def cleanup(self) -> None:
-        """Stop all MCP containers."""
-        if not self.containers:
+        """Stop per-session MCP containers (shared ones stay in the pool)."""
+        if not self._owned_containers and not self.containers:
             return
 
         logger.info(
-            f"[Session:{self.session_id}] Cleaning up {len(self.containers)} MCP(s)..."
+            f"[Session:{self.session_id}] Cleaning up {len(self._owned_containers)} per-session MCP(s)..."
         )
-        
-        # Stop all containers concurrently
+
         await asyncio.gather(
-            *[c.stop() for c in self.containers],
+            *[c.stop() for c in self._owned_containers],
             return_exceptions=True,
         )
-        
+
+        self._owned_containers.clear()
         self.containers.clear()
         self.all_tools.clear()
         self.tool_to_container.clear()
@@ -201,9 +217,12 @@ def get_session(conversation_id: str) -> AgentSession | None:
     return _sessions.get(conversation_id)
 
 
-def create_session(conversation_id: str) -> AgentSession:
+def create_session(
+    conversation_id: str,
+    mcp_user_configs: dict[str, dict] | None = None,
+) -> AgentSession:
     """Create and register a new session."""
-    session = AgentSession(session_id=conversation_id)
+    session = AgentSession(session_id=conversation_id, mcp_user_configs=mcp_user_configs)
     _sessions[conversation_id] = session
     return session
 

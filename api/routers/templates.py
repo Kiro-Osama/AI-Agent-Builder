@@ -98,9 +98,11 @@ async def list_mcps(
     result = await db.execute(query)
     mcps = result.scalars().all()
 
+    categories = sorted({m.category for m in mcps if m.category})
     return {
-        "mcps": [{**m.to_dict(), "has_embedding": m.embedding is not None} for m in mcps],
+        "mcps": [m.to_dict() for m in mcps],
         "total": len(mcps),
+        "categories": categories,
     }
 
 

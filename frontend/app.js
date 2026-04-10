@@ -441,12 +441,16 @@ async function loadMCPs() {
             const emb = mcp.has_embedding === true;
             const badgeClass = emb ? 'ok' : 'missing';
             const badgeLabel = emb ? 'Embedded' : 'No embedding';
+            const configBadge = mcp.requires_user_config
+                ? '<span class="mcp-embed-badge missing" style="font-size:0.6rem;">needs config</span>'
+                : '<span class="mcp-embed-badge ok" style="font-size:0.6rem;">shared</span>';
             return `
             <div class="mcp-card">
                 <div class="mcp-card-header">
                     <div class="mcp-card-title-row">
                         <span class="mcp-card-name">${escapeHtml(mcp.mcp_name)}</span>
                         <span class="mcp-embed-badge ${badgeClass}">${badgeLabel}</span>
+                        ${configBadge}
                     </div>
                     ${mcp.category ? `<span class="mcp-card-category">${escapeHtml(mcp.category)}</span>` : ''}
                 </div>
@@ -571,6 +575,146 @@ async function seedSkills() {
             btn.disabled = false;
             btn.innerHTML = '<span class="btn-seed-icon">🌱</span> Seed Skills from Disk';
         }
+    }
+}
+
+// -----------------------------------------------
+// Build Tab Switching
+// -----------------------------------------------
+function switchBuildTab(tab) {
+    document.getElementById('tabAI').classList.toggle('active', tab === 'ai');
+    document.getElementById('tabManual').classList.toggle('active', tab === 'manual');
+    document.getElementById('aiBuildContent').classList.toggle('hidden', tab !== 'ai');
+    document.getElementById('manualBuildContent').classList.toggle('hidden', tab !== 'manual');
+    if (tab === 'manual') {
+        populateManualPickers();
+    }
+}
+
+// -----------------------------------------------
+// Manual Build
+// -----------------------------------------------
+let _allMCPsCache = [];
+let _allSkillsCache = [];
+
+async function populateManualPickers() {
+    try {
+        const [mcpRes, skillRes] = await Promise.all([
+            fetch(`${API_BASE}/mcps`),
+            fetch(`${API_BASE}/skills`),
+        ]);
+        if (mcpRes.ok) {
+            const d = await mcpRes.json();
+            _allMCPsCache = d.mcps || [];
+        }
+        if (skillRes.ok) {
+            const d = await skillRes.json();
+            _allSkillsCache = d.skills || [];
+        }
+    } catch (e) {
+        console.error('Failed to populate pickers:', e);
+    }
+    renderManualMCPs(_allMCPsCache);
+    renderManualSkills(_allSkillsCache);
+}
+
+function renderManualMCPs(mcps) {
+    const list = document.getElementById('manualMCPList');
+    if (!list) return;
+    if (mcps.length === 0) {
+        list.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:0.82rem;">No MCPs available</div>';
+        return;
+    }
+    list.innerHTML = mcps.map(m => {
+        const configTag = m.requires_user_config ? '<span class="badge-config">needs config</span>' : '';
+        return `<label class="picker-item">
+            <input type="checkbox" value="${m.id}" data-name="${escapeHtml(m.mcp_name)}">
+            <span class="picker-item-name">${escapeHtml(m.mcp_name)}</span>
+            ${configTag}
+            <span class="picker-item-meta">${escapeHtml(m.category || '')}</span>
+        </label>`;
+    }).join('');
+}
+
+function renderManualSkills(skills) {
+    const list = document.getElementById('manualSkillList');
+    if (!list) return;
+    if (skills.length === 0) {
+        list.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:0.82rem;">No skills available</div>';
+        return;
+    }
+    list.innerHTML = skills.map(s => {
+        return `<label class="picker-item">
+            <input type="checkbox" value="${escapeHtml(s.skill_id)}">
+            <span class="picker-item-name">${escapeHtml(s.skill_name || s.skill_id)}</span>
+            <span class="picker-item-meta">${escapeHtml(s.category || '')}</span>
+        </label>`;
+    }).join('');
+}
+
+function filterManualMCPs() {
+    const q = (document.getElementById('mcpSearchManual').value || '').toLowerCase();
+    const filtered = q ? _allMCPsCache.filter(m =>
+        m.mcp_name.toLowerCase().includes(q) || (m.description || '').toLowerCase().includes(q)
+    ) : _allMCPsCache;
+    renderManualMCPs(filtered);
+}
+
+function filterManualSkills() {
+    const q = (document.getElementById('skillSearchManual').value || '').toLowerCase();
+    const filtered = q ? _allSkillsCache.filter(s =>
+        (s.skill_name || '').toLowerCase().includes(q) || (s.skill_id || '').toLowerCase().includes(q)
+    ) : _allSkillsCache;
+    renderManualSkills(filtered);
+}
+
+async function submitManualBuild() {
+    const agentName = document.getElementById('manualAgentName').value.trim() || 'Custom_Agent';
+    const systemPrompt = document.getElementById('manualSystemPrompt').value.trim();
+    const model = document.getElementById('manualModel').value;
+
+    const mcpCheckboxes = document.querySelectorAll('#manualMCPList input[type="checkbox"]:checked');
+    const skillCheckboxes = document.querySelectorAll('#manualSkillList input[type="checkbox"]:checked');
+
+    const selectedMcpIds = Array.from(mcpCheckboxes).map(cb => parseInt(cb.value));
+    const selectedSkillIds = Array.from(skillCheckboxes).map(cb => cb.value);
+
+    if (selectedMcpIds.length === 0 && selectedSkillIds.length === 0) {
+        showToast('Select at least one MCP or skill', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('manualBuildBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="btn-icon">⏳</span><span>Building...</span>';
+
+    try {
+        const res = await fetch(`${API_BASE}/build/manual`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                agent_name: agentName,
+                system_prompt: systemPrompt || 'You are a helpful AI assistant.',
+                selected_mcp_ids: selectedMcpIds,
+                selected_skill_ids: selectedSkillIds,
+                model: model,
+            }),
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Manual build failed');
+        }
+
+        const data = await res.json();
+        currentTaskId = data.task_id;
+        showToast(`Agent "${agentName}" built! ${data.mcps_count} MCPs, ${data.skills_count} skills`, 'success');
+        showResult(data.template);
+    } catch (e) {
+        showToast(`Error: ${e.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span class="btn-icon">🔧</span><span>Build Agent (Manual)</span>';
     }
 }
 

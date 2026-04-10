@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
-from api.routers import build, status, templates, chat, embeddings, skills_seed
+from api.routers import build, status, templates, chat, embeddings, skills_seed, admin, manual_build
 
 # -----------------------------------------------
 # Logging setup
@@ -61,6 +61,11 @@ async def lifespan(app: FastAPI):
     from core.agent_session import cleanup_all_sessions
 
     await cleanup_all_sessions()
+
+    from core.shared_mcp_pool import shared_pool
+
+    await shared_pool.shutdown()
+
     logger.info("🛑 Agent Builder V5 API shut down.")
 
 
@@ -95,6 +100,8 @@ app.include_router(templates.router, prefix="/api/v1", tags=["Templates"])
 app.include_router(chat.router, prefix="/api/v1", tags=["Chat"])
 app.include_router(embeddings.router, prefix="/api/v1", tags=["Embeddings"])
 app.include_router(skills_seed.router, prefix="/api/v1", tags=["Skills Seed"])
+app.include_router(admin.router, prefix="/api/v1", tags=["Admin"])
+app.include_router(manual_build.router, prefix="/api/v1", tags=["Manual Build"])
 
 
 # -----------------------------------------------

@@ -177,6 +177,38 @@
         }
         .suggestion-chip:hover { background: rgba(124, 58, 237, 0.15); color: var(--text-primary); border-color: var(--accent-purple); }
 
+        /* Config Modal */
+        .config-overlay {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+            z-index: 200; align-items: center; justify-content: center;
+        }
+        .config-overlay.open { display: flex; }
+        .config-modal {
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: 16px; padding: 28px; width: 480px; max-width: 94vw;
+            max-height: 80vh; overflow-y: auto;
+        }
+        .config-modal h3 { font-size: 16px; margin-bottom: 6px; }
+        .config-modal .config-desc { font-size: 12px; color: var(--text-secondary); margin-bottom: 18px; line-height: 1.5; }
+        .config-mcp-group { margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 10px; border: 1px solid var(--border); }
+        .config-mcp-group h4 { font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--accent-purple); }
+        .config-field { margin-bottom: 10px; }
+        .config-field label { display: block; font-size: 11px; font-weight: 500; color: var(--text-secondary); margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.04em; }
+        .config-field input {
+            width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+            background: rgba(0,0,0,0.2); color: var(--text-primary); font-family: 'JetBrains Mono', monospace;
+            font-size: 12px; outline: none;
+        }
+        .config-field input:focus { border-color: var(--accent-purple); }
+        .config-field .field-desc { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+        .config-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+        .config-actions button {
+            padding: 8px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+            font-family: 'Inter', sans-serif; border: none;
+        }
+        .btn-config-save { background: var(--accent-gradient); color: white; }
+        .btn-config-skip { background: transparent; border: 1px solid var(--border) !important; color: var(--text-secondary); }
+
         /* Input */
         .input-area { position: relative; z-index: 10; padding: 14px 24px; background: var(--bg-secondary); border-top: 1px solid var(--border); }
         .input-wrapper { display: flex; gap: 10px; align-items: flex-end; max-width: 900px; margin: 0 auto; }
@@ -260,12 +292,26 @@
         </div>
     </div>
 
+    <!-- Config Modal for MCPs requiring user API keys -->
+    <div class="config-overlay" id="configOverlay">
+        <div class="config-modal">
+            <h3>MCP Configuration Required</h3>
+            <p class="config-desc">Some tools in this agent need your API keys to work. Fill in the fields below. These are stored in memory only and never persisted.</p>
+            <div id="configFields"></div>
+            <div class="config-actions">
+                <button class="btn-config-skip" onclick="skipConfig()">Skip (tools won't work)</button>
+                <button class="btn-config-save" onclick="saveConfig()">Save & Start Chat</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const API_BASE = '/api/v1';
         let taskId = null;
         let conversationId = null;
         let agentConfig = null;
         let selectedModel = null;
+        let mcpUserConfigs = {}; // {mcp_name: {KEY: value}}
 
         const params = new URLSearchParams(window.location.search);
         taskId = params.get('task_id');
@@ -305,6 +351,12 @@
                 suggestionsEl.innerHTML = suggestions.map(s =>
                     `<div class="suggestion-chip" onclick="useSuggestion('${s}')">${s}</div>`
                 ).join('');
+
+                // Check if any MCPs need user config
+                const configRequired = agentConfig.config_required || [];
+                if (configRequired.length > 0) {
+                    showConfigModal(configRequired);
+                }
             } catch (e) {
                 document.getElementById('welcomeTitle').textContent = '❌ Agent not found';
                 document.getElementById('welcomeDesc').textContent = e.message;
@@ -338,6 +390,9 @@
             try {
                 const payload = { message, conversation_id: conversationId };
                 if (selectedModel) payload.model = selectedModel;
+                if (!conversationId && Object.keys(mcpUserConfigs).length > 0) {
+                    payload.mcp_configs = mcpUserConfigs;
+                }
 
                 const res = await fetch(`${API_BASE}/chat/${taskId}`, {
                     method: 'POST',
@@ -458,6 +513,46 @@
         }
 
         document.getElementById('chatInput').addEventListener('input', function() { autoResize(this); });
+
+        function showConfigModal(configRequired) {
+            const container = document.getElementById('configFields');
+            container.innerHTML = configRequired.map(mcp => {
+                const fields = (mcp.config_schema || []).map(field => {
+                    const inputType = field.secret ? 'password' : 'text';
+                    const req = field.required ? ' *' : '';
+                    return `<div class="config-field">
+                        <label>${escapeHtml(field.label || field.key)}${req}</label>
+                        <input type="${inputType}" data-mcp="${escapeHtml(mcp.mcp_name)}" data-key="${escapeHtml(field.key)}" placeholder="${escapeHtml(field.description || '')}">
+                        ${field.description ? `<div class="field-desc">${escapeHtml(field.description)}</div>` : ''}
+                    </div>`;
+                }).join('');
+                return `<div class="config-mcp-group">
+                    <h4>${escapeHtml(mcp.mcp_name)}</h4>
+                    ${fields}
+                </div>`;
+            }).join('');
+            document.getElementById('configOverlay').classList.add('open');
+        }
+
+        function saveConfig() {
+            const inputs = document.querySelectorAll('#configFields input[data-mcp]');
+            mcpUserConfigs = {};
+            inputs.forEach(inp => {
+                const mcpName = inp.dataset.mcp;
+                const key = inp.dataset.key;
+                const val = inp.value.trim();
+                if (val) {
+                    if (!mcpUserConfigs[mcpName]) mcpUserConfigs[mcpName] = {};
+                    mcpUserConfigs[mcpName][key] = val;
+                }
+            });
+            document.getElementById('configOverlay').classList.remove('open');
+        }
+
+        function skipConfig() {
+            mcpUserConfigs = {};
+            document.getElementById('configOverlay').classList.remove('open');
+        }
 
         function onModelChange() {
             const select = document.getElementById('modelSelect');

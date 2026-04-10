@@ -39,6 +39,10 @@ class MCP(Base):
     default_ports = Column(JSONB, server_default=text("'[]'::jsonb"))
     category = Column(String(50))
     run_config = Column(JSONB, server_default=text("'{}'::jsonb"))
+    requires_user_config = Column(Boolean, default=False, server_default=text("false"))
+    config_schema = Column(JSONB, server_default=text("'[]'::jsonb"))
+    shared_container_id = Column(String(100))
+    shared_container_status = Column(String(20))
     embedding = Column(Vector(768))
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -54,7 +58,10 @@ class MCP(Base):
             "default_ports": self.default_ports,
             "category": self.category,
             "run_config": self.run_config,
+            "requires_user_config": self.requires_user_config or False,
+            "config_schema": self.config_schema or [],
             "is_active": self.is_active,
+            "has_embedding": self.embedding is not None,
         }
 
 

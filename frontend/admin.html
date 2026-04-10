@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - MCP Management | Agent Builder V5</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .admin-table-wrap { overflow-x: auto; }
+        .admin-table {
+            width: 100%; border-collapse: collapse; font-size: 0.85rem;
+        }
+        .admin-table th, .admin-table td {
+            padding: 10px 14px; text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .admin-table th {
+            font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--text-muted); font-weight: 600;
+        }
+        .admin-table tr:hover td { background: rgba(255,255,255,0.02); }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.68rem; font-weight: 600; }
+        .badge.shared { background: rgba(16,185,129,0.15); color: var(--accent-green); border: 1px solid rgba(16,185,129,0.3); }
+        .badge.configurable { background: rgba(245,158,11,0.15); color: var(--accent-yellow); border: 1px solid rgba(245,158,11,0.3); }
+        .badge.inactive { background: rgba(239,68,68,0.12); color: var(--accent-red); border: 1px solid rgba(239,68,68,0.25); }
+        .btn-icon-sm {
+            padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border-color);
+            background: var(--bg-glass); color: var(--text-secondary); cursor: pointer;
+            font-size: 0.78rem; transition: all 0.2s;
+        }
+        .btn-icon-sm:hover { border-color: var(--accent-purple); color: var(--text-primary); }
+        .btn-icon-sm.danger:hover { border-color: var(--accent-red); color: var(--accent-red); }
+        .btn-icon-sm.test:hover { border-color: var(--accent-green); color: var(--accent-green); }
+        .actions-cell { display: flex; gap: 4px; }
+        .modal-overlay {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+            z-index: 1000; align-items: center; justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal {
+            background: var(--bg-secondary); border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg); padding: 28px; width: 560px; max-width: 94vw;
+            max-height: 85vh; overflow-y: auto;
+        }
+        .modal h3 { font-size: 1.1rem; margin-bottom: 18px; }
+        .form-group { margin-bottom: 14px; }
+        .form-group label { display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-secondary); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+        .form-group input, .form-group textarea, .form-group select {
+            width: 100%; padding: 8px 12px; background: var(--bg-glass); border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm); color: var(--text-primary); font-family: var(--font-sans);
+            font-size: 0.88rem; outline: none;
+        }
+        .form-group input:focus, .form-group textarea:focus { border-color: var(--accent-purple); }
+        .form-group textarea { min-height: 80px; resize: vertical; font-family: var(--font-mono); font-size: 0.82rem; }
+        .form-row { display: flex; gap: 12px; }
+        .form-row .form-group { flex: 1; }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+        .btn-primary { padding: 8px 20px; background: var(--gradient-primary); border: none; border-radius: var(--radius-sm); color: white; cursor: pointer; font-weight: 600; font-size: 0.88rem; }
+        .btn-cancel { padding: 8px 20px; background: transparent; border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer; font-size: 0.88rem; }
+        .test-result { margin-top: 12px; padding: 10px; background: var(--bg-glass); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.8rem; white-space: pre-wrap; color: var(--text-secondary); }
+        .filter-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+        .filter-bar input, .filter-bar select { padding: 8px 12px; background: var(--bg-glass); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.85rem; outline: none; }
+        .filter-bar input { flex: 1; min-width: 180px; }
+        .stats-bar { display: flex; gap: 16px; margin-bottom: 16px; font-size: 0.82rem; color: var(--text-secondary); }
+        .stats-bar strong { color: var(--text-primary); }
+    </style>
+</head>
+<body>
+    <div class="bg-orb bg-orb-1"></div>
+    <div class="bg-orb bg-orb-2"></div>
+
+    <header class="header">
+        <div class="header-brand">
+            <a href="/" style="text-decoration:none;display:flex;align-items:center;gap:12px;">
+                <div class="logo">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                        <rect width="32" height="32" rx="8" fill="url(#grad1)"/>
+                        <path d="M10 22L16 10L22 22H10Z" fill="white" opacity="0.9"/>
+                        <defs><linearGradient id="grad1" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#7C3AED"/><stop offset="1" stop-color="#2563EB"/></linearGradient></defs>
+                    </svg>
+                </div>
+                <h1>Agent Builder <span class="version">V5</span></h1>
+            </a>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+            <span style="font-size:0.85rem;color:var(--text-secondary);">Admin Panel</span>
+            <a href="/" class="btn-secondary btn-sm">← Dashboard</a>
+        </div>
+    </header>
+
+    <main class="main" style="max-width:1100px;">
+        <section class="section">
+            <div class="section-header">
+                <h2>MCP Catalog Management</h2>
+                <button class="btn-build" style="width:auto;padding:10px 20px;font-size:0.88rem;" onclick="openAddModal()">+ Add MCP</button>
+            </div>
+
+            <div class="stats-bar" id="statsBar"></div>
+
+            <div class="filter-bar">
+                <input type="text" id="searchInput" placeholder="Search MCPs..." oninput="renderTable()">
+                <select id="categoryFilter" onchange="renderTable()">
+                    <option value="">All categories</option>
+                </select>
+                <select id="typeFilter" onchange="renderTable()">
+                    <option value="">All types</option>
+                    <option value="shared">Shared only</option>
+                    <option value="configurable">Configurable only</option>
+                </select>
+                <label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--text-secondary);cursor:pointer;">
+                    <input type="checkbox" id="showInactive" onchange="loadMCPs()"> Show inactive
+                </label>
+            </div>
+
+            <div class="admin-table-wrap">
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Image</th>
+                            <th>Category</th>
+                            <th>Type</th>
+                            <th>Tools</th>
+                            <th>Embedding</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="mcpTableBody"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <!-- Add/Edit Modal -->
+    <div class="modal-overlay" id="mcpModal">
+        <div class="modal">
+            <h3 id="modalTitle">Add New MCP</h3>
+            <input type="hidden" id="editId">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>MCP Name</label>
+                    <input type="text" id="fName" placeholder="mcp-example">
+                </div>
+                <div class="form-group">
+                    <label>Category</label>
+                    <input type="text" id="fCategory" placeholder="devops">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Docker Image</label>
+                <input type="text" id="fImage" placeholder="mcp/example:latest">
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea id="fDesc" placeholder="What this MCP does..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>Tools (JSON array)</label>
+                <textarea id="fTools" placeholder='[{"name":"tool_name","description":"what it does"}]'></textarea>
+            </div>
+            <div class="form-group">
+                <label>Run Config (JSON)</label>
+                <textarea id="fRunConfig" placeholder='{"transport":"stdio","stdin_open":true}'></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Requires User Config?</label>
+                    <select id="fRequiresConfig">
+                        <option value="false">No (Shared)</option>
+                        <option value="true">Yes (Configurable)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Config Schema (JSON array)</label>
+                <textarea id="fConfigSchema" placeholder='[{"key":"API_KEY","label":"API Key","required":true,"secret":true}]'></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+                <button class="btn-primary" onclick="saveMCP()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+</html>
