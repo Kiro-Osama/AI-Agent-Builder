@@ -7,6 +7,7 @@ Handles starting multiple MCPs, aggregating tools, routing tool calls.
 import asyncio
 import logging
 import os
+import time
 from typing import Any
 
 from core.mcp_client import MCPContainerSession, MCPError
@@ -14,6 +15,9 @@ from core.mcp_client import MCPContainerSession, MCPError
 logger = logging.getLogger(__name__)
 
 WORKSPACE_PATH = os.getenv("WORKSPACE_PATH", "/workspace")
+
+# Idle MCP chat sessions older than this are stopped (default 60 minutes)
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_MINUTES", "60")) * 60
 
 
 class AgentSession:
@@ -28,6 +32,7 @@ class AgentSession:
 
     def __init__(self, session_id: str = ""):
         self.session_id = session_id
+        self.created_at: float = time.time()
         self.containers: list[MCPContainerSession] = []
         self.all_tools: list[dict] = []  # MCP-format tools from all containers
         self.tool_to_container: dict[str, MCPContainerSession] = {}
@@ -206,14 +211,40 @@ def create_session(conversation_id: str) -> AgentSession:
     return session
 
 
-async def cleanup_session(conversation_id: str) -> None:
-    """Cleanup and remove a session."""
-    session = _sessions.pop(conversation_id, None)
-    if session:
-        await session.cleanup()
+def session_key(task_id: str, conversation_id: str) -> str:
+    """Composite key so chat state cannot leak across different builds."""
+    return f"{task_id}:{conversation_id}"
+
+
+async def cleanup_session(session_or_conv_key: str) -> None:
+    """Cleanup and remove a session by composite key ``task_id:conversation_id``."""
+    sess = _sessions.pop(session_or_conv_key, None)
+    if sess:
+        await sess.cleanup()
+
+
+async def cleanup_sessions_matching_conversation_id(conversation_id: str) -> None:
+    """Remove any session whose key ends with ``:conversation_id`` (DELETE endpoint)."""
+    keys = [k for k in list(_sessions.keys()) if k.endswith(f":{conversation_id}")]
+    for k in keys:
+        await cleanup_session(k)
 
 
 async def cleanup_all_sessions() -> None:
     """Cleanup all active sessions (called on shutdown)."""
-    for conv_id in list(_sessions.keys()):
-        await cleanup_session(conv_id)
+    for key in list(_sessions.keys()):
+        await cleanup_session(key)
+
+
+async def cleanup_expired_sessions() -> list[str]:
+    """
+    Stop sessions idle longer than SESSION_TTL_SECONDS.
+    Returns composite keys removed so callers can drop in-memory history.
+    """
+    removed: list[str] = []
+    now = time.time()
+    for key, sess in list(_sessions.items()):
+        if now - sess.created_at > SESSION_TTL_SECONDS:
+            await cleanup_session(key)
+            removed.append(key)
+    return removed

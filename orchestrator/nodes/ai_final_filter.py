@@ -1,7 +1,12 @@
 """
 Node 6: AI Final Filter
 =========================
-Intelligently filters the tool pool to the absolute minimum required tools.
+Intelligently filters the tool pool to the minimum required tools.
+
+Key design decisions:
+- MCPs  = Docker containers; genuinely expensive — be selective.
+- Skills = Knowledge overlays / system-prompt injections; zero runtime cost.
+  A skill should be KEPT whenever it is relevant to the task.
 """
 import json
 import logging
@@ -11,29 +16,43 @@ from core.openrouter import openrouter_client
 
 logger = logging.getLogger(__name__)
 
-AI_FINAL_FILTER_PROMPT = """You are the Final Selection AI for an Agent Builder system. You have a pool of retrieved tools (MCPs and Skills).
+AI_FINAL_FILTER_PROMPT = """You are the Final Selection AI for an Agent Builder system.
 
 Task: {user_query}
 
-Available Tool Pool:
+════ AVAILABLE TOOLS ════
 {available_tools}
+═════════════════════════
 
-Instructions:
-1. Strictly filter this pool. Select ONLY the absolute minimum necessary tools required to execute the task.
-2. Discard any tools that are not directly required.
-3. For MCPs, consider their Docker images and tools they provide.
-4. For Skills, consider their capabilities and system prompts.
-5. Be very selective - more tools means more complexity and cost.
+## Selection rules
 
-Output ONLY valid JSON:
+### MCPs  (Docker containers — pick carefully)
+- Each MCP starts a separate Docker container, so only include ones DIRECTLY needed.
+- Evaluate by the tools they expose and whether those tools are required for the task.
+- Prefer 1-3 MCPs maximum unless the task genuinely requires more.
+
+### Skills  (Knowledge overlays — keep any that are relevant)
+- Skills are NOT Docker containers; they add ZERO runtime overhead.
+- A skill injects expert instructions into the agent's system prompt.
+- KEEP a skill if it overlaps with ANY part of the task — even partially.
+- Only DISCARD a skill if it is completely unrelated to the task topic.
+- When in doubt, KEEP the skill; including an extra skill costs nothing.
+
+## Similarity scores
+Each tool has a `similarity` score (0–1) showing how well it matches the task query.
+- similarity ≥ 0.55 → strongly relevant, include unless clearly wrong domain
+- similarity 0.35–0.55 → likely useful, include for skills, evaluate for MCPs
+- similarity < 0.35 → marginal; skip unless obviously needed
+
+Output ONLY valid JSON — no markdown, no extra text:
 {{
     "selected_mcps": [
-        {{"id": 1, "mcp_name": "...", "reason": "why this MCP is needed"}}
+        {{"id": "<exact id from pool>", "mcp_name": "...", "reason": "..."}}
     ],
     "selected_skills": [
-        {{"skill_id": "...", "reason": "why this skill is needed"}}
+        {{"skill_id": "<exact skill_id from pool>", "reason": "..."}}
     ],
-    "reasoning": "Overall selection rationale"
+    "reasoning": "Overall rationale"
 }}"""
 
 
@@ -43,19 +62,22 @@ async def ai_final_filter(state: AgentBuilderState) -> dict:
     """
     user_query = state["user_query"]
     retrieved_mcps = state["retrieved_mcps"]
-    validated_skills = state.get("validated_skills", [])
+    # validated_skills is set by sandbox_validator (create_skill path).
+    # On the "proceed" path, it's never set — fall back to retrieved_skills.
+    validated_skills = state.get("validated_skills") or state.get("retrieved_skills", [])
 
-    logger.info(f"🎯 Node 6: Filtering {len(retrieved_mcps)} MCPs + {len(validated_skills)} Skills...")
+    logger.info("🎯 Node 6: Filtering %d MCPs + %d Skills...", len(retrieved_mcps), len(validated_skills))
 
-    # Build the available tools pool
+    # Build the available tools pool (include similarity score so LLM can use it)
     tools_pool = {
         "mcps": [
             {
-                "id": m["id"],
+                "id": str(m["id"]),          # always string to match LLM output
                 "name": m["mcp_name"],
                 "description": m["description"],
                 "tools": m.get("tools_provided", []),
-                "category": m.get("category"),
+                "category": m.get("category", ""),
+                "similarity": round(m.get("similarity", 0.0), 3),
             }
             for m in retrieved_mcps
         ],
@@ -64,6 +86,8 @@ async def ai_final_filter(state: AgentBuilderState) -> dict:
                 "skill_id": s["skill_id"],
                 "name": s.get("skill_name", s["skill_id"]),
                 "description": s.get("description", ""),
+                "category": s.get("category", ""),
+                "similarity": round(s.get("similarity", 0.0), 3),
             }
             for s in validated_skills
         ],
@@ -76,28 +100,46 @@ async def ai_final_filter(state: AgentBuilderState) -> dict:
                     "role": "system",
                     "content": AI_FINAL_FILTER_PROMPT.format(
                         user_query=user_query,
-                        available_tools=json.dumps(tools_pool, indent=2),
+                        available_tools=json.dumps(tools_pool, indent=1),
                     ),
                 },
                 {
                     "role": "user",
-                    "content": f"Select the minimum tools needed for: {user_query}",
+                    "content": f"Select the tools for: {user_query}",
                 },
             ],
             temperature=0.2,
+            max_tokens=1024,
         )
 
-        # Map selected IDs back to full objects
-        selected_mcp_ids = {m["id"] for m in result.get("selected_mcps", [])}
-        selected_skill_ids = {s["skill_id"] for s in result.get("selected_skills", [])}
+        # --- MCP mapping: compare as strings to avoid int vs str mismatch ---
+        mcp_lookup = {str(m["id"]): m for m in retrieved_mcps}
+        selected_mcp_ids = {str(m.get("id", "")) for m in result.get("selected_mcps", [])}
+        selected_mcps = [mcp_lookup[sid] for sid in selected_mcp_ids if sid in mcp_lookup]
 
-        selected_mcps = [m for m in retrieved_mcps if m["id"] in selected_mcp_ids]
-        selected_skills = [s for s in validated_skills if s["skill_id"] in selected_skill_ids]
+        # --- Skill mapping: normalise to lowercase-stripped ---
+        skill_lookup = {s["skill_id"].strip().lower(): s for s in validated_skills}
+        selected_skill_ids = {
+            s.get("skill_id", "").strip().lower()
+            for s in result.get("selected_skills", [])
+        }
+        selected_skills = [skill_lookup[sid] for sid in selected_skill_ids if sid in skill_lookup]
 
-        # Fallback: if nothing was selected but we have tools, keep at least the best MCP
+        # Fallback: if no MCPs selected, keep top similarity match
         if not selected_mcps and retrieved_mcps:
             selected_mcps = [retrieved_mcps[0]]
-            logger.warning("  No MCPs selected by filter, keeping top match")
+            logger.warning("  No MCPs selected by filter — keeping top similarity match")
+
+        # Safety net for skills: if retriever found high-similarity skills (≥0.55)
+        # but the LLM dropped all of them, restore the high-confidence ones.
+        if not selected_skills and validated_skills:
+            high_conf = [s for s in validated_skills if s.get("similarity", 0) >= 0.55]
+            if high_conf:
+                selected_skills = high_conf
+                logger.warning(
+                    "  LLM dropped all skills — restoring %d high-similarity skills",
+                    len(high_conf),
+                )
 
         logger.info(f"  Selected: {len(selected_mcps)} MCPs, {len(selected_skills)} Skills")
         return {
@@ -109,7 +151,6 @@ async def ai_final_filter(state: AgentBuilderState) -> dict:
 
     except Exception as e:
         logger.error(f"AI Final Filter failed: {e}")
-        # Fallback: keep top 3 MCPs and all validated skills
         return {
             "selected_tools": {
                 "mcps": retrieved_mcps[:3],

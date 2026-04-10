@@ -17,14 +17,15 @@ logger = logging.getLogger(__name__)
 
 import os
 
-SYNC_DB_URL = os.getenv(
-    "ALEMBIC_DATABASE_URL",
-    "postgresql://agentbuilder:secure_password_change_me@db:5432/agentbuilder_db",
-)
+_SYNC_DB_URL = os.getenv("ALEMBIC_DATABASE_URL", "").strip()
+if not _SYNC_DB_URL:
+    raise RuntimeError(
+        "ALEMBIC_DATABASE_URL is required for the LangGraph pipeline (sync PostgreSQL URL)."
+    )
 
 
 def _get_session() -> Session:
-    engine = create_engine(SYNC_DB_URL)
+    engine = create_engine(_SYNC_DB_URL)
     return Session(engine)
 
 
@@ -120,11 +121,12 @@ async def similarity_retriever(state: AgentBuilderState) -> dict:
                 skill_results = session.execute(
                     text("""
                         SELECT id, skill_id, skill_name, description, status, version, skill_data,
-                               1 - (embedding <=> CAST(:query_vec AS vector)) as similarity
+                               1 - (embedding <=> CAST(:query_vec AS vector)) as similarity,
+                               system_prompt, category, source
                         FROM skills
                         WHERE status = 'active' AND embedding IS NOT NULL
                         ORDER BY embedding <=> CAST(:query_vec AS vector)
-                        LIMIT 5
+                        LIMIT 8
                     """),
                     {"query_vec": str(query_embedding)},
                 ).fetchall()
@@ -139,6 +141,9 @@ async def similarity_retriever(state: AgentBuilderState) -> dict:
                         "version": row[5],
                         "skill_data": row[6],
                         "similarity": float(row[7]) if row[7] else 0.0,
+                        "system_prompt": row[8] or "",
+                        "category": row[9] or "",
+                        "source": row[10] or "",
                     })
             else:
                 # Fallback text search for skills
@@ -167,6 +172,9 @@ async def similarity_retriever(state: AgentBuilderState) -> dict:
                                 "version": row[5],
                                 "skill_data": row[6],
                                 "similarity": 0.5,
+                                "system_prompt": "",
+                                "category": "",
+                                "source": "",
                             })
 
         finally:

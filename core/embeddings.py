@@ -84,7 +84,8 @@ class EmbeddingGenerator:
         url = f"{GEMINI_BASE_URL}/models/{self.model}:embedContent?key={self.api_key}"
         payload = {
             "model": f"models/{self.model}",
-            "content": {"parts": [{"text": text}]}
+            "content": {"parts": [{"text": text}]},
+            "outputDimensionality": self.dimension,
         }
 
         response = httpx_sync.post(url, json=payload, timeout=30.0)

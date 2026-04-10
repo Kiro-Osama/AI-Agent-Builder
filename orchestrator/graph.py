@@ -40,30 +40,6 @@ def _route_after_assessment(state: AgentBuilderState) -> str:
         return "ai_final_filter"
 
 
-def _route_after_validation(state: AgentBuilderState) -> str:
-    """
-    Conditional edge after Node 5:
-    - If skills failed and retries available → back to skill_creator
-    - Otherwise → proceed to ai_final_filter
-    """
-    new_skills = state.get("new_skills", [])
-    validated_skills = state.get("validated_skills", [])
-
-    # Check if any new skills failed and have retries left
-    failed_skills = [
-        s for s in new_skills
-        if s.get("status") != "active" and s not in validated_skills
-    ]
-
-    if failed_skills:
-        logger.info(f"  → {len(failed_skills)} skills need retry")
-        # For now, proceed anyway to avoid infinite loops
-        # In production, could route back to skill_creator with retry logic
-        return "ai_final_filter"
-    else:
-        return "ai_final_filter"
-
-
 def build_agent_graph() -> StateGraph:
     """
     Build and compile the LangGraph StateGraph with all 9 nodes.
@@ -103,17 +79,9 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
-    # --- Skill creation flow ---
+    # --- Skill creation flow (retry routing TBD; always continue to filter) ---
     graph.add_edge("skill_creator", "sandbox_validator")
-
-    # --- Conditional edge after Sandbox Validation ---
-    graph.add_conditional_edges(
-        "sandbox_validator",
-        _route_after_validation,
-        {
-            "ai_final_filter": "ai_final_filter",
-        },
-    )
+    graph.add_edge("sandbox_validator", "ai_final_filter")
 
     # --- Final pipeline ---
     graph.add_edge("ai_final_filter", "docker_mcp_runner")

@@ -3,8 +3,20 @@
    ============================================ */
 
 const API_BASE = '/api/v1';
+const FETCH_TIMEOUT_MS = 30000;
 let currentTaskId = null;
 let pollInterval = null;
+
+/** Avoid hung UI when API/proxy is slow or unreachable */
+async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+    const ctrl = new AbortController();
+    const id = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: ctrl.signal });
+    } finally {
+        clearTimeout(id);
+    }
+}
 
 // -----------------------------------------------
 // Initialization
@@ -12,6 +24,8 @@ let pollInterval = null;
 document.addEventListener('DOMContentLoaded', () => {
     checkAPIHealth();
     loadMCPs();
+    loadSkills();
+    loadEmbeddingStatus();
     setupCharCounter();
 });
 
@@ -205,6 +219,101 @@ function chatWithAgent() {
 }
 
 // -----------------------------------------------
+// Embedding catalog status & run
+// -----------------------------------------------
+async function loadEmbeddingStatus() {
+    const pill = document.getElementById('embedStatusPill');
+    const dot = document.getElementById('embedStatusDot');
+    const text = document.getElementById('embedStatusText');
+    const summary = document.getElementById('embedSummaryLine');
+    if (!pill || !text) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/embeddings/status`);
+        if (!res.ok) throw new Error('Could not load embedding status');
+
+        const data = await res.json();
+
+        const gemini = data.gemini_api_configured;
+        const mc = data.mcps || {};
+        const sk = data.skills || {};
+        const mOk = `${mc.with_embedding || 0}/${mc.total_active || 0}`;
+        const sOk = `${sk.with_embedding || 0}/${sk.total_with_description || 0}`;
+        const mTot = mc.total_active || 0;
+        const sDesc = sk.total_with_description || 0;
+
+        if (!gemini) {
+            dot.className = 'embed-status-dot neutral';
+            text.textContent = 'Gemini API key not set';
+        } else if (mTot === 0 && sDesc === 0) {
+            dot.className = 'embed-status-dot neutral';
+            text.textContent = 'No MCPs or skills to index';
+        } else if (data.catalog_complete) {
+            dot.className = 'embed-status-dot complete';
+            text.textContent = `Complete · MCPs ${mOk} · Skills ${sOk}`;
+        } else {
+            dot.className = 'embed-status-dot incomplete';
+            text.textContent = `Incomplete · MCPs ${mOk} · Skills ${sOk}`;
+        }
+
+        if (summary) {
+            const missM = mc.without_embedding || 0;
+            const missS = sk.without_embedding || 0;
+            summary.textContent =
+                `Active MCPs: ${mc.total_active || 0} — embedded: ${mc.with_embedding || 0}` +
+                (missM ? ` (${missM} missing)` : '') +
+                ` · Skills (with description): ${sk.total_with_description || 0} — embedded: ${sk.with_embedding || 0}` +
+                (missS ? ` (${missS} missing)` : '') +
+                (!gemini ? ' · Add GEMINI_API_KEY to .env' : '');
+        }
+    } catch (e) {
+        dot.className = 'embed-status-dot incomplete';
+        text.textContent = 'Status unavailable';
+        if (summary) summary.textContent = e.message || '';
+    }
+}
+
+async function runEmbeddings() {
+    const btn = document.getElementById('embedRunBtn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Generating…';
+    }
+
+    try {
+        const res = await fetch(
+            `${API_BASE}/embeddings/run?only_missing=true&include_mcps=true&include_skills=true`,
+            { method: 'POST' }
+        );
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+            const msg = data.detail || data.message || 'Request failed';
+            throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+        }
+
+        const em = data.embedded_mcps ?? 0;
+        const es = data.embedded_skills ?? 0;
+        const errN = (data.errors || []).length;
+
+        showToast(
+            `Embeddings updated: +${em} MCPs, +${es} skills` + (errN ? ` · ${errN} error(s)` : ''),
+            errN ? 'error' : 'success'
+        );
+
+        await loadEmbeddingStatus();
+        await loadMCPs();
+    } catch (e) {
+        showToast(`Embeddings: ${e.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Generate embeddings';
+        }
+    }
+}
+
+// -----------------------------------------------
 // Load MCPs
 // -----------------------------------------------
 async function loadMCPs() {
@@ -218,14 +327,21 @@ async function loadMCPs() {
         const mcps = data.mcps || [];
 
         if (mcps.length === 0) {
-            grid.innerHTML = '<div class="loading-placeholder">No MCPs found. Run seed migration to add sample MCPs.</div>';
+            grid.innerHTML = '<div class="loading-placeholder">No MCPs found. Run Alembic migrations (002_seed_mcps) and ensure the API has started.</div>';
             return;
         }
 
-        grid.innerHTML = mcps.map(mcp => `
+        grid.innerHTML = mcps.map(mcp => {
+            const emb = mcp.has_embedding === true;
+            const badgeClass = emb ? 'ok' : 'missing';
+            const badgeLabel = emb ? 'Embedded' : 'No embedding';
+            return `
             <div class="mcp-card">
                 <div class="mcp-card-header">
-                    <span class="mcp-card-name">${escapeHtml(mcp.mcp_name)}</span>
+                    <div class="mcp-card-title-row">
+                        <span class="mcp-card-name">${escapeHtml(mcp.mcp_name)}</span>
+                        <span class="mcp-embed-badge ${badgeClass}">${badgeLabel}</span>
+                    </div>
                     ${mcp.category ? `<span class="mcp-card-category">${escapeHtml(mcp.category)}</span>` : ''}
                 </div>
                 <div class="mcp-card-desc">${escapeHtml(truncate(mcp.description, 120))}</div>
@@ -235,10 +351,120 @@ async function loadMCPs() {
                     ).join('')}
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
 
     } catch (e) {
         grid.innerHTML = `<div class="loading-placeholder">⚠️ Could not load MCPs: ${e.message}</div>`;
+    }
+}
+
+// -----------------------------------------------
+// Load & Seed Skills
+// -----------------------------------------------
+async function loadSkills() {
+    const grid = document.getElementById('skillsGrid');
+    const summary = document.getElementById('skillsSummary');
+    if (!grid) return;
+
+    grid.innerHTML = '<div class="loading-placeholder">Fetching skills…</div>';
+
+    try {
+        const res = await fetchWithTimeout(`${API_BASE}/skills`);
+        if (!res.ok) throw new Error('Failed to load skills');
+
+        const data = await res.json();
+        const skills = data.skills || [];
+
+        if (summary) {
+            const total = skills.length;
+            const embedded = skills.filter(s => s.has_embedding).length;
+            const cats = data.categories || [];
+            summary.textContent = total === 0
+                ? 'No skills in database. Click "Seed Skills from Disk" to import.'
+                : `${total} skill${total !== 1 ? 's' : ''} · ${embedded} embedded · Categories: ${cats.join(', ') || 'none'}`;
+        }
+
+        if (skills.length === 0) {
+            grid.innerHTML = '<div class="loading-placeholder">No skills found. Seed them from disk using the button above.</div>';
+            return;
+        }
+
+        grid.innerHTML = skills.map(skill => {
+            const emb = skill.has_embedding === true;
+            const embClass = emb ? 'ok' : 'missing';
+            const embLabel = emb ? 'Embedded' : 'No embedding';
+            const srcBadge = skill.source === 'seeded'
+                ? '<span class="skill-source-badge seeded">seeded</span>'
+                : skill.source === 'pipeline'
+                    ? '<span class="skill-source-badge pipeline">pipeline</span>'
+                    : '';
+            const catBadge = skill.category
+                ? `<span class="skill-category-badge">${escapeHtml(skill.category)}</span>`
+                : '';
+
+            return `
+            <div class="skill-card">
+                <div class="skill-card-header">
+                    <span class="skill-card-name">${escapeHtml(skill.skill_name || skill.skill_id)}</span>
+                    <div class="skill-badges">
+                        ${catBadge}
+                        ${srcBadge}
+                        <span class="mcp-embed-badge ${embClass}">${embLabel}</span>
+                    </div>
+                </div>
+                <div class="skill-card-desc">${escapeHtml(truncate(skill.description, 150))}</div>
+                <div class="skill-card-meta">
+                    <span class="skill-status ${skill.status}">${escapeHtml(skill.status)}</span>
+                </div>
+            </div>
+            `;
+        }).join('');
+
+    } catch (e) {
+        const msg = e.name === 'AbortError' ? `Request timed out after ${FETCH_TIMEOUT_MS / 1000}s (check API on port 8000 or nginx proxy).` : e.message;
+        grid.innerHTML = `<div class="loading-placeholder">Could not load skills: ${escapeHtml(msg)}</div>`;
+    }
+}
+
+async function seedSkills() {
+    const btn = document.getElementById('seedSkillsBtn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="btn-seed-icon">⏳</span> Seeding…';
+    }
+
+    try {
+        const res = await fetchWithTimeout(`${API_BASE}/skills/seed`, { method: 'POST' }, 120000);
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+            const msg = data.detail || 'Seed request failed';
+            throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+        }
+
+        const ins = data.inserted ?? 0;
+        const upd = data.updated ?? 0;
+        const embQueued = data.embeddings?.status === 'queued';
+        const emb = data.embeddings?.embedded_skills ?? 0;
+        const errN = (data.embeddings?.errors || []).length;
+
+        showToast(
+            embQueued
+                ? `Skills seeded: +${ins} new, ${upd} updated. Embeddings running in background — refresh in a minute or use Generate embeddings.`
+                : `Skills seeded: +${ins} new, ${upd} updated, ${emb} embedded` + (errN ? ` · ${errN} error(s)` : ''),
+            errN ? 'error' : 'success'
+        );
+
+        await loadSkills();
+        await loadEmbeddingStatus();
+    } catch (e) {
+        showToast(`Seed failed: ${e.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<span class="btn-seed-icon">🌱</span> Seed Skills from Disk';
+        }
     }
 }
 

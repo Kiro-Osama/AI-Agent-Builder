@@ -4,11 +4,9 @@ Alembic Environment Configuration
 Supports both sync and async migration execution.
 """
 import os
-import asyncio
 from logging.config import fileConfig
 
-from sqlalchemy import pool, engine_from_config, create_engine
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy import pool, create_engine
 from alembic import context
 
 # Import models to register metadata
@@ -25,11 +23,12 @@ if config.config_file_name is not None:
 # Set target metadata for autogenerate
 target_metadata = Base.metadata
 
-# Get DB URL from environment
-DATABASE_URL = os.getenv(
-    "ALEMBIC_DATABASE_URL",
-    "postgresql://agentbuilder:secure_password_change_me@db:5432/agentbuilder_db",
-)
+# Get DB URL from environment (no baked-in credentials)
+DATABASE_URL = os.getenv("ALEMBIC_DATABASE_URL", "").strip()
+if not DATABASE_URL:
+    raise RuntimeError(
+        "ALEMBIC_DATABASE_URL is required for Alembic (e.g. postgresql://user:pass@host:5432/dbname)."
+    )
 
 
 def run_migrations_offline() -> None:

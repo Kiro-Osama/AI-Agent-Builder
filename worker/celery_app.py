@@ -5,7 +5,10 @@ Redis broker, result backend, and task serialization.
 """
 import os
 
+from dotenv import load_dotenv
 from celery import Celery
+
+load_dotenv()
 
 # -----------------------------------------------
 # Celery App

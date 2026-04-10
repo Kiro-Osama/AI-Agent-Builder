@@ -12,46 +12,24 @@ from core.openrouter import openrouter_client
 
 logger = logging.getLogger(__name__)
 
-TEMPLATE_BUILDER_PROMPT = """You are the Agent Configurator for an Agent Builder system. Assemble the final execution template.
+TEMPLATE_BUILDER_PROMPT = """You are an Agent Configurator. Build a final execution template as compact JSON.
 
 Task: {user_query}
 
-Selected Running MCPs (with active Docker ports):
+MCPs available:
 {running_mcps}
 
-Selected Skills (active and validated):
+Skills available:
 {selected_skills}
 
-Instructions:
-1. Determine if this task requires a Multi-Agent System (MAS). If the task has clearly distinct sub-tasks (e.g., read + analyze + report), split into multiple agents. For simpler tasks, use a single agent.
-2. Choose the best OpenRouter model for each agent based on task complexity:
-   - Simple tasks: "meta-llama/llama-3.1-8b-instruct"
-   - Medium tasks: "anthropic/claude-3.5-sonnet"
-   - Complex/Creative: "openai/gpt-4o"
-3. Write a comprehensive system prompt for each agent, specifically mentioning:
-   - The exact running ports of the MCPs
-   - The available skills and their capabilities
-   - Clear instructions on how to use each tool
-4. Give each agent a descriptive name.
+Rules:
+- Use single_agent unless task has clearly distinct parallel sub-tasks.
+- Model: simple→"meta-llama/llama-3.1-8b-instruct:free", medium→"anthropic/claude-3.5-sonnet", complex→"openai/gpt-4o"
+- selected_skills: include ONLY skill_ids directly relevant to this specific task (max 3).
+- system_prompt: 2-4 sentences describing the agent's role and what tools/skills to use.
 
-Output ONLY valid JSON:
-{{
-    "project_type": "single_agent" | "multi_agent",
-    "agents": [
-        {{
-            "agent_name": "Descriptive_Agent_Name",
-            "assigned_openrouter_model": "model/id",
-            "sub_task": "What this specific agent handles",
-            "selected_mcps": [
-                {{"name": "mcp-name", "running_port": 12345}}
-            ],
-            "selected_skills": ["skill-id-1"],
-            "system_prompt": "You are a specialized agent..."
-        }}
-    ],
-    "execution_order": "sequential" | "parallel",
-    "reasoning": "Why this configuration was chosen"
-}}"""
+Output ONLY this JSON (no markdown, no explanation):
+{"project_type":"single_agent","agents":[{"agent_name":"Name","assigned_openrouter_model":"model/id","sub_task":"task description","selected_mcps":[{"name":"mcp-name","running_port":null}],"selected_skills":["skill-id"],"system_prompt":"Agent instructions."}],"execution_order":"sequential","reasoning":"brief reason"}"""
 
 
 async def template_builder(state: AgentBuilderState) -> dict:
@@ -89,22 +67,22 @@ async def template_builder(state: AgentBuilderState) -> dict:
     ], indent=2) if selected_skills else "[]"
 
     try:
+        # Build system message via string replacement to avoid .format() breaking
+        # on JSON content that contains literal { } characters.
+        system_content = (
+            TEMPLATE_BUILDER_PROMPT
+            .replace("{user_query}", user_query)
+            .replace("{running_mcps}", mcps_info)
+            .replace("{selected_skills}", skills_info)
+        )
+
         result = await openrouter_client.chat_completion_json(
             messages=[
-                {
-                    "role": "system",
-                    "content": TEMPLATE_BUILDER_PROMPT.format(
-                        user_query=user_query,
-                        running_mcps=mcps_info,
-                        selected_skills=skills_info,
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"Build the agent template for: {user_query}",
-                },
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": f"Build the agent template for: {user_query}"},
             ],
             temperature=0.3,
+            max_tokens=4096,
         )
 
         # Override model if user specified preference

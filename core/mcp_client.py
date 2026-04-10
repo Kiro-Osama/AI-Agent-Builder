@@ -23,6 +23,25 @@ logger = logging.getLogger(__name__)
 MCP_TIMEOUT = int(os.getenv("MCP_TIMEOUT", "30"))
 
 
+def _mask_docker_cmd_for_log(cmd: list[str]) -> str:
+    """Redact values after -e KEY=value so secrets are not logged."""
+    parts: list[str] = []
+    i = 0
+    while i < len(cmd):
+        if cmd[i] == "-e" and i + 1 < len(cmd):
+            arg = cmd[i + 1]
+            if "=" in arg:
+                name, _ = arg.split("=", 1)
+                parts.extend(["-e", f"{name}=***"])
+            else:
+                parts.extend(["-e", arg])
+            i += 2
+        else:
+            parts.append(cmd[i])
+            i += 1
+    return " ".join(parts)
+
+
 class MCPError(Exception):
     """Error from MCP server."""
     pass
@@ -95,7 +114,7 @@ class MCPContainerSession:
         if command_args:
             cmd.extend(command_args)
 
-        logger.info(f"[MCP:{self.mcp_name}] Starting: {' '.join(cmd)}")
+        logger.info(f"[MCP:{self.mcp_name}] Starting: {_mask_docker_cmd_for_log(cmd)}")
 
         try:
             self.proc = await asyncio.create_subprocess_exec(

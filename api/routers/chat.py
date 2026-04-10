@@ -15,26 +15,29 @@ Subsequent messages:
 import logging
 import os
 import uuid
-from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.agent_loop import run_agent_loop
 from core.agent_session import (
-    AgentSession,
-    get_session,
+    cleanup_sessions_matching_conversation_id,
     create_session,
-    cleanup_session,
+    get_session,
+    session_key as composite_session_key,
 )
+from core.db import get_db
+from core.models import BuildHistory
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# In-memory conversation store
+# In-memory: composite key task_id:conversation_id -> message list
 conversations: dict[str, list[dict]] = {}
 
-# Cache agent configs (loaded from build results)
+# Cache agent configs loaded from DB (keyed by task_id)
 agent_configs: dict[str, dict] = {}
 
 DEFAULT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "openrouter/free")
@@ -63,84 +66,78 @@ class ChatResponse(BaseModel):
     mcps_connected: int = 0
 
 
+async def _load_agent_config(db: AsyncSession, task_id: str) -> dict:
+    """Load and cache agent template for this build task."""
+    if task_id in agent_configs:
+        return agent_configs[task_id]
+
+    result = await db.execute(
+        select(BuildHistory).where(BuildHistory.task_id == task_id)
+    )
+    build = result.scalar_one_or_none()
+    if not build or not build.result_template:
+        raise HTTPException(404, "Build not found or not completed")
+
+    template = build.result_template
+    agents = template.get("agents", [])
+    if not agents:
+        raise HTTPException(400, "No agents in template")
+
+    agent = agents[0]
+    cfg = {
+        "agent_name": agent.get("agent_name", "AI_Assistant"),
+        "system_prompt": agent.get("system_prompt", "You are a helpful AI assistant."),
+        "model": agent.get("assigned_openrouter_model", DEFAULT_MODEL),
+        "selected_mcps": agent.get("selected_mcps", []),
+        "selected_skills": agent.get("selected_skills", []),
+    }
+    agent_configs[task_id] = cfg
+    return cfg
+
+
 @router.post("/chat/{task_id}", response_model=ChatResponse)
-async def chat_with_agent(task_id: str, request: ChatRequest):
+async def chat_with_agent(
+    task_id: str,
+    request: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Send a message to a built agent.
     The agent uses real MCP tools via JSON-RPC — not simulated.
     """
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session
-    from core.models import BuildHistory
+    config = await _load_agent_config(db, task_id)
 
-    SYNC_DB_URL = os.getenv(
-        "ALEMBIC_DATABASE_URL",
-        "postgresql://agentbuilder:secure_password_change_me@db:5432/agentbuilder_db",
-    )
-
-    # ---- Load agent config ----
-    if task_id not in agent_configs:
-        engine = create_engine(SYNC_DB_URL)
-        session = Session(engine)
-        try:
-            build = session.query(BuildHistory).filter_by(task_id=task_id).first()
-            if not build or not build.result_template:
-                raise HTTPException(404, "Build not found or not completed")
-
-            template = build.result_template
-            agents = template.get("agents", [])
-            if not agents:
-                raise HTTPException(400, "No agents in template")
-
-            agent = agents[0]
-            agent_configs[task_id] = {
-                "agent_name": agent.get("agent_name", "AI_Assistant"),
-                "system_prompt": agent.get("system_prompt", "You are a helpful AI assistant."),
-                "model": agent.get("assigned_openrouter_model", DEFAULT_MODEL),
-                "selected_mcps": agent.get("selected_mcps", []),
-                "selected_skills": agent.get("selected_skills", []),
-            }
-        finally:
-            session.close()
-            engine.dispose()
-
-    config = agent_configs[task_id]
-
-    # ---- Get or create conversation ----
     conv_id = request.conversation_id or str(uuid.uuid4())
-    if conv_id not in conversations:
-        conversations[conv_id] = []
+    key = composite_session_key(task_id, conv_id)
 
-    history = conversations[conv_id]
+    if key not in conversations:
+        conversations[key] = []
 
-    # ---- Get or create agent session (MCP containers) ----
-    agent_session = get_session(conv_id)
+    history = conversations[key]
+
+    agent_session = get_session(key)
     if not agent_session:
-        agent_session = create_session(conv_id)
+        agent_session = create_session(key)
         selected_mcps = config.get("selected_mcps", [])
-        
+
         if selected_mcps:
             logger.info(
-                f"[Chat] Starting MCP session for {conv_id}: "
+                f"[Chat] Starting MCP session for {key}: "
                 f"{[m.get('mcp_name') for m in selected_mcps]}"
             )
             try:
                 await agent_session.start(selected_mcps)
             except Exception as e:
                 logger.error(f"[Chat] Failed to start MCP session: {e}")
-                # Continue without tools — agent will respond without them
 
-    # ---- Determine model ----
     if request.model:
         model = request.model
     else:
         model = config["model"]
-        # Auto-fallback expensive models to free in development
         if os.getenv("APP_ENV") == "development":
             if any(x in model for x in ["claude", "gpt-4", "gemini-pro"]):
                 model = DEFAULT_MODEL
 
-    # ---- Run agent loop ----
     try:
         result = await run_agent_loop(
             session=agent_session,
@@ -152,7 +149,6 @@ async def chat_with_agent(task_id: str, request: ChatRequest):
 
         response_text = result["response"]
 
-        # Update conversation history
         history.append({"role": "user", "content": request.message})
         history.append({"role": "assistant", "content": response_text})
 
@@ -172,46 +168,37 @@ async def chat_with_agent(task_id: str, request: ChatRequest):
 
 
 @router.get("/chat/{task_id}/info")
-async def get_agent_info(task_id: str):
+async def get_agent_info(task_id: str, db: AsyncSession = Depends(get_db)):
     """Get agent info for a completed build."""
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session
-    from core.models import BuildHistory
-
-    SYNC_DB_URL = os.getenv(
-        "ALEMBIC_DATABASE_URL",
-        "postgresql://agentbuilder:secure_password_change_me@db:5432/agentbuilder_db",
+    result = await db.execute(
+        select(BuildHistory).where(BuildHistory.task_id == task_id)
     )
+    build = result.scalar_one_or_none()
+    if not build or not build.result_template:
+        raise HTTPException(404, "Build not found")
 
-    engine = create_engine(SYNC_DB_URL)
-    session = Session(engine)
-    try:
-        build = session.query(BuildHistory).filter_by(task_id=task_id).first()
-        if not build or not build.result_template:
-            raise HTTPException(404, "Build not found")
+    template = build.result_template
+    agents = template.get("agents", [])
+    agent = agents[0] if agents else {}
 
-        template = build.result_template
-        agents = template.get("agents", [])
-        agent = agents[0] if agents else {}
-
-        return {
-            "task_id": task_id,
-            "agent_name": agent.get("agent_name", "AI_Assistant"),
-            "model": agent.get("assigned_openrouter_model", "unknown"),
-            "system_prompt": agent.get("system_prompt", ""),
-            "selected_mcps": agent.get("selected_mcps", []),
-            "selected_skills": agent.get("selected_skills", []),
-            "project_type": template.get("project_type", "single_agent"),
-            "user_query": build.user_query,
-        }
-    finally:
-        session.close()
-        engine.dispose()
+    return {
+        "task_id": task_id,
+        "agent_name": agent.get("agent_name", "AI_Assistant"),
+        "model": agent.get("assigned_openrouter_model", "unknown"),
+        "system_prompt": agent.get("system_prompt", ""),
+        "selected_mcps": agent.get("selected_mcps", []),
+        "selected_skills": agent.get("selected_skills", []),
+        "project_type": template.get("project_type", "single_agent"),
+        "user_query": build.user_query,
+    }
 
 
 @router.delete("/chat/{conversation_id}/session")
 async def end_session(conversation_id: str):
     """Explicitly end a chat session and cleanup MCP containers."""
-    await cleanup_session(conversation_id)
-    conversations.pop(conversation_id, None)
+    await cleanup_sessions_matching_conversation_id(conversation_id)
+    # Remove all conversation histories for this conversation_id across tasks
+    keys_to_drop = [k for k in list(conversations.keys()) if k.endswith(f":{conversation_id}")]
+    for k in keys_to_drop:
+        conversations.pop(k, None)
     return {"status": "cleaned_up", "conversation_id": conversation_id}

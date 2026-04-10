@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
@@ -34,10 +35,10 @@ class MCP(Base):
     mcp_name = Column(String(100), unique=True, nullable=False)
     docker_image = Column(String(255), nullable=False)
     description = Column(Text, nullable=False)
-    tools_provided = Column(JSONB, default=[])
-    default_ports = Column(JSONB, default=[])
+    tools_provided = Column(JSONB, server_default=text("'[]'::jsonb"))
+    default_ports = Column(JSONB, server_default=text("'[]'::jsonb"))
     category = Column(String(50))
-    run_config = Column(JSONB, default={})
+    run_config = Column(JSONB, server_default=text("'{}'::jsonb"))
     embedding = Column(Vector(768))
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -73,7 +74,10 @@ class Skill(Base):
     status = Column(String(50), default="pending")  # pending | testing | active | failed
     version = Column(String(20), default="v1.0")
     source_folder_path = Column(String(255))
-    skill_data = Column(JSONB, default={})
+    skill_data = Column(JSONB, server_default=text("'{}'::jsonb"))
+    category = Column(String(50))
+    source = Column(String(50))  # "seeded" | "pipeline"
+    system_prompt = Column(Text)
     retry_count = Column(Integer, default=0)
     max_retries = Column(Integer, default=3)
     error_log = Column(Text)
@@ -88,6 +92,10 @@ class Skill(Base):
             "description": self.description,
             "status": self.status,
             "version": self.version,
+            "category": self.category,
+            "source": self.source,
+            "source_folder_path": self.source_folder_path,
+            "has_embedding": self.embedding is not None,
             "skill_data": self.skill_data,
         }
 
@@ -103,9 +111,9 @@ class BuildHistory(Base):
     status = Column(String(50), default="queued")  # queued | processing | completed | failed
     current_node = Column(String(50))
     result_template = Column(JSONB)
-    selected_mcps = Column(JSONB, default=[])
-    selected_skills = Column(JSONB, default=[])
-    processing_log = Column(JSONB, default=[])
+    selected_mcps = Column(JSONB, server_default=text("'[]'::jsonb"))
+    selected_skills = Column(JSONB, server_default=text("'[]'::jsonb"))
+    processing_log = Column(JSONB, server_default=text("'[]'::jsonb"))
     started_at = Column(DateTime(timezone=True))
     completed_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())

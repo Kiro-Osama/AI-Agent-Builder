@@ -5,6 +5,13 @@ Async SQLAlchemy engine + session factory for PostgreSQL + pgvector.
 """
 import os
 from contextlib import asynccontextmanager
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
@@ -15,12 +22,14 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 # -----------------------------------------------
-# Database URL from environment
+# Database URL from environment (no baked-in credentials)
 # -----------------------------------------------
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://agentbuilder:secure_password_change_me@db:5432/agentbuilder_db",
-)
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is required (e.g. postgresql+asyncpg://user:pass@host:5432/dbname). "
+        "Set it in your environment or .env file."
+    )
 
 # -----------------------------------------------
 # Engine with connection pooling

@@ -4,7 +4,6 @@ FastAPI API - Schemas
 Pydantic models for request/response validation.
 """
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -38,7 +37,7 @@ class StatusResponse(BaseModel):
     status: str
     current_node: str | None = None
     progress: float = 0.0  # 0.0 to 1.0
-    processing_log: list[dict] = []
+    processing_log: list[dict] = Field(default_factory=list)
     result_template: dict | None = None
     error: str | None = None
 
@@ -49,7 +48,7 @@ class MCPInfo(BaseModel):
     mcp_name: str
     docker_image: str
     description: str
-    tools_provided: list[dict] = []
+    tools_provided: list[dict] = Field(default_factory=list)
     category: str | None = None
     is_active: bool = True
 
@@ -67,7 +66,7 @@ class SkillInfo(BaseModel):
 class AgentTemplate(BaseModel):
     """The final agent configuration template."""
     project_type: str = "single_agent"  # single_agent | multi_agent
-    agents: list[dict] = []
+    agents: list[dict] = Field(default_factory=list)
     status: str = "ready_for_user_approval"
 
 
@@ -84,4 +83,4 @@ class HealthResponse(BaseModel):
     """Health check response."""
     status: str = "ok"
     version: str = "5.0.0"
-    services: dict[str, str] = {}
+    services: dict[str, str] = Field(default_factory=dict)

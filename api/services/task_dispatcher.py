@@ -41,20 +41,7 @@ async def dispatch_build_task(
     # Generate task ID upfront
     task_id = str(uuid.uuid4())
 
-    # Send task by name to the "build" queue (worker listens on "build")
-    celery_app.send_task(
-        "worker.tasks.build_agent.run_build_pipeline",
-        kwargs={
-            "query": query,
-            "preferred_model": preferred_model,
-            "max_mcps": max_mcps,
-            "enable_skill_creation": enable_skill_creation,
-        },
-        task_id=task_id,
-        queue="build",
-    )
-
-    # Record in database
+    # Persist build row FIRST so the worker never races on missing task_id
     await db.execute(
         insert(BuildHistory).values(
             task_id=task_id,
@@ -74,6 +61,18 @@ async def dispatch_build_task(
         )
     )
     await db.commit()
+
+    celery_app.send_task(
+        "worker.tasks.build_agent.run_build_pipeline",
+        kwargs={
+            "query": query,
+            "preferred_model": preferred_model,
+            "max_mcps": max_mcps,
+            "enable_skill_creation": enable_skill_creation,
+        },
+        task_id=task_id,
+        queue="build",
+    )
 
     logger.info(f"Dispatched build task: {task_id}")
     return task_id

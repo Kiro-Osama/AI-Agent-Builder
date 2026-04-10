@@ -32,13 +32,14 @@ logs-%:
 restart-%:
 	docker-compose restart $*
 
-# Run database migrations manually
+# Run Alembic migrations (schema + MCP seeds in 002_seed_mcps)
 migrate:
-	docker-compose exec db psql -U $${POSTGRES_USER:-agentbuilder} -d $${POSTGRES_DB:-agentbuilder_db} -f /docker-entrypoint-initdb.d/migrations/001_init.sql
+	docker-compose exec api alembic upgrade head
 
-# Run database seeds manually
+# Alias: MCP data is seeded by migration 002; use migrate
 seed:
-	docker-compose exec db psql -U $${POSTGRES_USER:-agentbuilder} -d $${POSTGRES_DB:-agentbuilder_db} -f /docker-entrypoint-initdb.d/seeds/seed_mcps.sql
+	@echo "MCP seeds are applied by Alembic (002_seed_mcps). Run: make migrate"
+	@docker-compose exec api alembic upgrade head
 
 # Open psql shell
 db-shell:

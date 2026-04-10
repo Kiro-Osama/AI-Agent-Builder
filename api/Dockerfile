@@ -24,7 +24,6 @@ COPY api/ /app/api/
 COPY core/ /app/core/
 COPY alembic/ /app/alembic/
 COPY alembic.ini /app/alembic.ini
-COPY db/seeds/ /app/db/seeds/
 
 # Create skills directory
 RUN mkdir -p /app/skills

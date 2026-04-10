@@ -7,7 +7,7 @@ GET /api/v1/templates/{template_id} - Get a specific template.
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db import get_db
@@ -24,6 +24,11 @@ async def list_templates(
     db: AsyncSession = Depends(get_db),
 ):
     """List all completed agent templates."""
+    count_result = await db.execute(
+        select(func.count()).select_from(BuildHistory).where(BuildHistory.status == "completed")
+    )
+    total_count = int(count_result.scalar_one() or 0)
+
     result = await db.execute(
         select(BuildHistory)
         .where(BuildHistory.status == "completed")
@@ -45,7 +50,7 @@ async def list_templates(
             }
             for b in builds
         ],
-        "total": len(builds),
+        "total": total_count,
     }
 
 
@@ -94,7 +99,7 @@ async def list_mcps(
     mcps = result.scalars().all()
 
     return {
-        "mcps": [m.to_dict() for m in mcps],
+        "mcps": [{**m.to_dict(), "has_embedding": m.embedding is not None} for m in mcps],
         "total": len(mcps),
     }
 
@@ -118,4 +123,5 @@ async def list_skills(
     return {
         "skills": [s.to_dict() for s in skills],
         "total": len(skills),
+        "categories": list({s.category for s in skills if s.category}),
     }

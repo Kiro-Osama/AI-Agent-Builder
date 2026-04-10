@@ -33,7 +33,17 @@
             </div>
             <h1>Agent Builder <span class="version">V5</span></h1>
         </div>
-        <div class="header-status">
+        <div class="header-status header-status-right">
+            <div class="embed-toolbar" id="embedToolbar" title="Vector embeddings for semantic search (MCP catalog + skills)">
+                <span class="embed-toolbar-label">Vector index</span>
+                <div class="embed-status-pill" id="embedStatusPill">
+                    <span class="embed-status-dot" id="embedStatusDot"></span>
+                    <span id="embedStatusText">Loading…</span>
+                </div>
+                <button type="button" class="btn-embed" id="embedRunBtn" onclick="runEmbeddings()">
+                    Generate embeddings
+                </button>
+            </div>
             <div class="status-indicator" id="apiStatus">
                 <span class="status-dot"></span>
                 <span>Checking...</span>
@@ -176,10 +186,30 @@
         <section class="section mcps-section" id="mcpsSection">
             <div class="section-header">
                 <h2>🧰 Available MCPs</h2>
-                <button class="btn-secondary btn-sm" onclick="loadMCPs()">Refresh</button>
+                <div class="section-header-actions">
+                    <p class="embed-summary-line" id="embedSummaryLine" aria-live="polite"></p>
+                    <button class="btn-secondary btn-sm" onclick="loadMCPs()">Refresh</button>
+                </div>
             </div>
             <div class="mcps-grid" id="mcpsGrid">
                 <div class="loading-placeholder">Loading MCPs...</div>
+            </div>
+        </section>
+
+        <!-- Skills Catalog Section -->
+        <section class="section skills-section" id="skillsSection">
+            <div class="section-header">
+                <h2>🧠 Skills Catalog</h2>
+                <div class="section-header-actions">
+                    <button class="btn-seed" id="seedSkillsBtn" onclick="seedSkills()">
+                        <span class="btn-seed-icon">🌱</span> Seed Skills from Disk
+                    </button>
+                    <button class="btn-secondary btn-sm" onclick="loadSkills()">Refresh</button>
+                </div>
+            </div>
+            <p class="skills-summary" id="skillsSummary"></p>
+            <div class="skills-grid" id="skillsGrid">
+                <div class="loading-placeholder">Loading skills...</div>
             </div>
         </section>
     </main>

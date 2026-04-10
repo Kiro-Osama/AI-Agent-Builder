@@ -1,0 +1,547 @@
+# Agent Builder System V5 — Cursor Rules & Architecture Guide
+# ===========================================================
+# A production-grade, generic AI Agent Builder that dynamically
+# creates autonomous agents capable of executing real tools via
+# the Model Context Protocol (MCP) over Docker containers.
+
+# ███████████████████████████████████████████████████████████████
+# 1. PROJECT OVERVIEW
+# ███████████████████████████████████████████████████████████████
+
+# WHAT IT DOES:
+# The user describes a task (e.g., "organize my Downloads folder").
+# The system automatically:
+#   1. Analyzes the task → selects the right tools (MCPs) from a database
+#   2. Builds an agent configuration (system prompt, model, tools)
+#   3. Lets the user chat with the agent, which ACTUALLY executes tools
+#      inside MCP Docker containers via JSON-RPC (not simulated)
+#
+# KEY PRINCIPLE: Adding a new tool = adding a row to the `mcps` DB table.
+# Zero code changes needed. The system is fully generic.
+
+# TECH STACK:
+# - Backend:    FastAPI (Python 3.11), async
+# - Worker:     Celery + Redis (async pipeline execution)
+# - Database:   PostgreSQL 16 + pgvector (768-dim embeddings)
+# - Frontend:   Vanilla HTML/CSS/JS served by Nginx
+# - Container:  Docker Compose (5 services)
+# - LLM:        OpenRouter (multi-model gateway, supports tool calling)
+# - Embeddings: Google Gemini API (text-embedding-004, FREE tier)
+# - Pipeline:   LangGraph StateGraph (9-node DAG)
+# - MCP:        Model Context Protocol over Docker stdio (JSON-RPC 2.0)
+
+# ███████████████████████████████████████████████████████████████
+# 2. DIRECTORY STRUCTURE
+# ███████████████████████████████████████████████████████████████
+
+# x:\AI\AI_agent_builder_antogravity\
+# ├── .env                          # All environment variables (API keys, DB, workspace path)
+# ├── docker-compose.yml            # 5 services: db, redis, api, worker, frontend
+# ├── Makefile                      # Shortcuts: make up, make build, make logs, make seed
+# ├── alembic.ini                   # Alembic config (points to ALEMBIC_DATABASE_URL)
+# │
+# ├── api/                          # FastAPI API Gateway
+# │   ├── Dockerfile                # Python 3.11-slim + Docker CLI binary (for MCP)
+# │   ├── entrypoint.sh             # Runs alembic upgrade, then uvicorn
+# │   ├── main.py                   # FastAPI app, CORS, lifespan (MCP cleanup on shutdown)
+# │   ├── config.py                 # Pydantic Settings from env vars
+# │   ├── requirements.txt          # fastapi, uvicorn, sqlalchemy[asyncio], httpx, celery, etc.
+# │   ├── auto_embed.py             # Script: generates embeddings for all MCPs via Gemini API
+# │   ├── routers/
+# │   │   ├── build.py              # POST /api/v1/build — submit agent build request
+# │   │   ├── status.py             # GET  /api/v1/status/{task_id} — poll pipeline progress
+# │   │   ├── templates.py          # GET  /api/v1/templates — list completed agents
+# │   │   │                         # GET  /api/v1/mcps — list available MCPs
+# │   │   │                         # GET  /api/v1/skills — list skills
+# │   │   └── chat.py               # POST /api/v1/chat/{task_id} — REAL chat with agent
+# │   │                             #   Creates MCP container sessions on first message
+# │   │                             #   Runs ReAct agent loop (LLM ↔ MCP tools)
+# │   │                             # GET  /api/v1/chat/{task_id}/info — agent metadata
+# │   │                             # DELETE /api/v1/chat/{conv_id}/session — cleanup
+# │   ├── schemas/
+# │   │   └── __init__.py           # Pydantic schemas: BuildRequest, StatusResponse, etc.
+# │   └── services/
+# │       └── task_dispatcher.py    # Dispatches build tasks to Celery via send_task()
+# │
+# ├── core/                         # Shared business logic (used by both API and Worker)
+# │   ├── db.py                     # Async SQLAlchemy engine + session factory (asyncpg)
+# │   ├── models.py                 # ORM: MCP, Skill, BuildHistory tables
+# │   ├── openrouter.py             # OpenRouter API client (chat_completion, tool calling)
+# │   ├── embeddings.py             # Google Gemini embedding generator (768-dim)
+# │   ├── docker_manager.py         # Docker SDK wrapper (start_mcp, run_sandbox, cleanup)
+# │   ├── mcp_client.py             # ★ MCP JSON-RPC client over Docker stdio
+# │   │                             #   - MCPContainerSession: starts container, initialize,
+# │   │                             #     list_tools, call_tool, stop
+# │   │                             #   - mcp_tools_to_openrouter(): converts MCP tool schemas
+# │   │                             #     to OpenRouter/OpenAI function calling format
+# │   ├── agent_session.py          # ★ AgentSession: manages multiple MCP containers per chat
+# │   │                             #   - Starts all MCPs, aggregates tools, routes tool calls
+# │   │                             #   - In-memory session store (keyed by conversation_id)
+# │   └── agent_loop.py             # ★ ReAct agent loop (LLM ↔ MCP tool execution)
+# │                                 #   - Enhances system prompt with path mapping + tool info
+# │                                 #   - Loops: LLM → tool_calls → execute → results → LLM
+# │                                 #   - Max 15 iterations, 10KB result truncation
+# │
+# ├── orchestrator/                 # LangGraph build pipeline
+# │   ├── graph.py                  # StateGraph wiring: 9 nodes + conditional edges
+# │   ├── state.py                  # AgentBuilderState TypedDict (all pipeline fields)
+# │   └── nodes/
+# │       ├── query_analyzer.py     # N1: Expands user query → sub-queries for vector search
+# │       ├── similarity_retriever.py # N2: pgvector cosine search on MCPs + Skills tables
+# │       ├── needs_assessment.py   # N3: Checks if tools cover the task, identifies gaps
+# │       ├── skill_creator.py      # N4: Creates new Python skills if gaps found
+# │       ├── sandbox_validator.py  # N5: Tests new skills in sandboxed Docker containers
+# │       ├── ai_final_filter.py    # N6: AI filters to minimum necessary tools
+# │       ├── docker_mcp_runner.py  # N7: Validates MCP configs, pre-pulls images
+# │       │                         #     (containers start at CHAT time, not build time)
+# │       ├── template_builder.py   # N8: LLM builds agent config (name, prompt, model)
+# │       │                         #     ★ _inject_mcp_metadata(): merges docker_image +
+# │       │                         #       run_config from pipeline state into LLM output
+# │       └── final_output.py       # N9: Validates template, adds pipeline metadata
+# │
+# ├── worker/                       # Celery async worker
+# │   ├── Dockerfile                # Python 3.11-slim + Docker SDK + LangGraph
+# │   ├── celery_app.py             # Celery config (Redis broker, "build" queue)
+# │   ├── requirements.txt          # Same as API + langgraph, docker
+# │   └── tasks/
+# │       ├── build_agent.py        # Main task: runs LangGraph pipeline, updates build_history
+# │       └── sandbox_validator.py  # Runs skill code in sandboxed Docker containers
+# │
+# ├── frontend/                     # Static frontend (Nginx)
+# │   ├── Dockerfile                # Nginx Alpine, copies HTML + nginx.conf
+# │   ├── nginx.conf                # Proxies /api/* → api:8000, 300s timeout
+# │   ├── index.html                # Builder dashboard (submit tasks, view progress)
+# │   ├── chat.html                 # Agent chat UI (tool call cards, model selector)
+# │   ├── styles.css                # Shared CSS (dark theme, glassmorphism, animations)
+# │   └── app.js                    # Builder JS (polling, form submission)
+# │
+# ├── db/                           # Database container
+# │   ├── Dockerfile                # pgvector/pgvector:pg16, copies init scripts
+# │   └── seeds/
+# │       └── seed_mcps.sql         # 7 pre-configured MCPs (filesystem, fetch, playwright, etc.)
+# │
+# └── alembic/
+#     └── versions/
+#         └── 001_initial_schema.py  # Creates mcps, skills, build_history tables + pgvector
+
+# ███████████████████████████████████████████████████████████████
+# 3. DATA FLOW — END TO END
+# ███████████████████████████████████████████████████████████████
+
+# ┌──────────────────────────────────────────────────────────────┐
+# │                    PHASE 1: BUILD                           │
+# │  User submits: "organize my Downloads by content"           │
+# │                                                              │
+# │  Frontend → POST /api/v1/build → Celery worker              │
+# │                                                              │
+# │  LangGraph Pipeline (9 nodes):                              │
+# │  N1 Query Analyzer → expand query to sub-queries            │
+# │  N2 Similarity Retriever → pgvector search MCPs & Skills    │
+# │  N3 Needs Assessment → check if tools cover the task        │
+# │     ├── if gaps → N4 Skill Creator → N5 Sandbox Validator   │
+# │     └── if ok → N6 AI Final Filter                          │
+# │  N6 AI Final Filter → select minimum necessary tools        │
+# │  N7 Docker MCP Runner → validate configs, pre-pull images   │
+# │  N8 Template Builder → LLM creates agent config + INJECT    │
+# │      docker_image and run_config from pipeline state         │
+# │  N9 Final Output → validate + add metadata                  │
+# │                                                              │
+# │  Output: result_template saved to build_history table        │
+# └──────────────────────────────────────────────────────────────┘
+#
+# ┌──────────────────────────────────────────────────────────────┐
+# │                    PHASE 2: CHAT                            │
+# │  User opens chat → clicks "Chat" on built agent             │
+# │                                                              │
+# │  Frontend → POST /api/v1/chat/{task_id}                     │
+# │                                                              │
+# │  On first message:                                          │
+# │  1. Load agent config from build_history.result_template    │
+# │  2. Create AgentSession                                     │
+# │  3. For each MCP in selected_mcps:                          │
+# │     a. docker run -i --rm {image} {args} (via subprocess)   │
+# │     b. JSON-RPC: initialize() → tools/list                  │
+# │  4. Convert MCP tools → OpenRouter function calling format  │
+# │                                                              │
+# │  Each message → ReAct Loop:                                 │
+# │  ┌─────────────────────────────────────────┐                │
+# │  │ System prompt + path mapping + tools    │                │
+# │  │          ↓                              │                │
+# │  │ OpenRouter LLM (with tools=[...])       │                │
+# │  │          ↓                              │                │
+# │  │ tool_calls? ──YES──→ MCP JSON-RPC call  │                │
+# │  │    │                      ↓             │                │
+# │  │    │              tool result           │                │
+# │  │    │                  ↓                 │                │
+# │  │    │           ← back to LLM ──────────│                │
+# │  │    NO                                   │                │
+# │  │    ↓                                    │                │
+# │  │ Return final text response              │                │
+# │  └─────────────────────────────────────────┘                │
+# │                                                              │
+# │  Response includes: text + tool_calls[] (displayed as cards)│
+# └──────────────────────────────────────────────────────────────┘
+
+# ███████████████████████████████████████████████████████████████
+# 4. DATABASE SCHEMA (PostgreSQL + pgvector)
+# ███████████████████████████████████████████████████████████████
+
+# TABLE: mcps (STATIC — only insert via seed SQL, never via code)
+# ┌────────────────┬────────────┬───────────────────────────────┐
+# │ Column         │ Type       │ Notes                         │
+# ├────────────────┼────────────┼───────────────────────────────┤
+# │ id             │ SERIAL PK  │                               │
+# │ mcp_name       │ VARCHAR    │ UNIQUE — e.g. "mcp-filesystem"│
+# │ docker_image   │ VARCHAR    │ Full image path               │
+# │ description    │ TEXT       │ For embedding + LLM context   │
+# │ tools_provided │ JSONB      │ [{name, description}, ...]    │
+# │ default_ports  │ JSONB      │ Ports to expose (if HTTP)     │
+# │ category       │ VARCHAR    │ files|web|data|communication  │
+# │ run_config     │ JSONB      │ ★ HOW to run the container:   │
+# │                │            │   transport, volumes, command, │
+# │                │            │   environment, stdin_open      │
+# │ embedding      │ VECTOR(768)│ Gemini text-embedding-004     │
+# │ is_active      │ BOOLEAN    │ Filter inactive MCPs          │
+# └────────────────┴────────────┴───────────────────────────────┘
+
+# TABLE: skills (DYNAMIC — created by the pipeline when gaps are found)
+# ┌────────────────┬────────────┬───────────────────────────────┐
+# │ Column         │ Type       │ Notes                         │
+# ├────────────────┼────────────┼───────────────────────────────┤
+# │ id             │ UUID PK    │                               │
+# │ skill_id       │ VARCHAR    │ UNIQUE — e.g. "pdf-reader-v1" │
+# │ skill_name     │ VARCHAR    │ Human-readable name           │
+# │ description    │ TEXT       │                               │
+# │ embedding      │ VECTOR(768)│                               │
+# │ status         │ VARCHAR    │ pending|testing|active|failed  │
+# │ skill_data     │ JSONB      │ {system_prompt, tools_schema,  │
+# │                │            │  code, execution_env}         │
+# │ retry_count    │ INT        │ Sandbox test retry tracking   │
+# └────────────────┴────────────┴───────────────────────────────┘
+
+# TABLE: build_history (tracks every build request and its pipeline state)
+# ┌────────────────┬────────────┬───────────────────────────────┐
+# │ Column         │ Type       │ Notes                         │
+# ├────────────────┼────────────┼───────────────────────────────┤
+# │ id             │ UUID PK    │                               │
+# │ task_id        │ VARCHAR    │ UNIQUE — Celery task ID       │
+# │ user_query     │ TEXT       │ Original user request         │
+# │ status         │ VARCHAR    │ queued|processing|completed|failed│
+# │ current_node   │ VARCHAR    │ Last completed pipeline node  │
+# │ result_template│ JSONB      │ ★ Final agent config (agents, │
+# │                │            │   selected_mcps with full     │
+# │                │            │   docker_image + run_config)  │
+# │ processing_log │ JSONB      │ [{timestamp, node, message}]  │
+# └────────────────┴────────────┴───────────────────────────────┘
+
+# ███████████████████████████████████████████████████████████████
+# 5. MCP PROTOCOL — HOW TOOL EXECUTION WORKS
+# ███████████████████████████████████████████████████████████████
+
+# MCP (Model Context Protocol) uses JSON-RPC 2.0 over stdio.
+# The API container starts MCP containers via:
+#   docker run -i --rm -v <workspace>:/workspace <image> <args>
+#
+# Communication flow (stdin/stdout of the subprocess):
+#
+# 1. INITIALIZE handshake:
+#    → {"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
+#    ← {"jsonrpc":"2.0","id":1,"result":{"serverInfo":{...},"capabilities":{...}}}
+#    → {"jsonrpc":"2.0","method":"notifications/initialized"}
+#
+# 2. DISCOVER tools:
+#    → {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+#    ← {"jsonrpc":"2.0","id":2,"result":{"tools":[{name,description,inputSchema}]}}
+#
+# 3. CALL a tool:
+#    → {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_directory","arguments":{"path":"/workspace"}}}
+#    ← {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"file1.pdf\nfile2.xlsx"}]}}
+#
+# IMPORTANT: The API container needs Docker CLI binary AND access to
+# /var/run/docker.sock to start MCP containers as subprocess children.
+
+# ███████████████████████████████████████████████████████████████
+# 6. run_config FORMAT (stored in mcps.run_config JSONB column)
+# ███████████████████████████████████████████████████████████████
+
+# Every MCP in the database has a run_config that tells the system
+# HOW to launch its Docker container. Example:
+#
+# {
+#   "transport": "stdio",           // "stdio" (JSON-RPC) or "http"
+#   "stdin_open": true,             // Needs -i flag
+#   "command": ["/workspace"],      // Args after image name
+#   "volumes": {
+#     "/host/workspace": "/workspace"  // Placeholder → replaced with WORKSPACE_PATH
+#   },
+#   "environment": {
+#     "SLACK_BOT_TOKEN": "REQUIRED"   // "REQUIRED" = needs user config
+#   },
+#   "notes": "Human-readable launch instructions"
+# }
+#
+# Volume placeholder mapping (in core/mcp_client.py):
+#   "/host/workspace" → WORKSPACE_PATH env var (default: X:\)
+#   "/host/memory-data" → WORKSPACE_PATH/.agent-memory
+
+# ███████████████████████████████████████████████████████████████
+# 7. WORKSPACE PATH MAPPING — CRITICAL CONCEPT
+# ███████████████████████████████████████████████████████████████
+
+# The host filesystem (e.g., X:\) is mounted as /workspace inside
+# MCP containers. The agent loop injects this mapping into the
+# system prompt so the LLM knows to use /workspace/... paths:
+#
+#   X:\          →  /workspace
+#   X:\AI        →  /workspace/AI
+#   X:\Downloads →  /workspace/Downloads
+#
+# This is configured via WORKSPACE_PATH in .env
+# The path translation happens in:
+#   - core/mcp_client.py → volume mount replacement
+#   - core/agent_loop.py → system prompt path mapping section
+
+# ███████████████████████████████████████████████████████████████
+# 8. DOCKER SERVICES (docker-compose.yml)
+# ███████████████████████████████████████████████████████████████
+
+# ┌────────────┬──────┬──────────────────────────────────────────┐
+# │ Service    │ Port │ Description                              │
+# ├────────────┼──────┼──────────────────────────────────────────┤
+# │ db         │ 5432 │ pgvector/pgvector:pg16                   │
+# │ redis      │ 6379 │ Redis 7 Alpine (broker + backend)        │
+# │ api        │ 8000 │ FastAPI + Docker CLI + Docker socket     │
+# │ worker     │  -   │ Celery worker (LangGraph pipeline)       │
+# │ frontend   │ 3000 │ Nginx (proxies /api → api:8000)          │
+# │ adminer    │ 8080 │ DB admin UI (dev profile only)           │
+# └────────────┴──────┴──────────────────────────────────────────┘
+#
+# CRITICAL VOLUMES:
+# - api & worker mount /var/run/docker.sock (to start MCP containers)
+# - api & worker mount ./core, ./orchestrator, ./skills (hot reload)
+# - db mounts pgdata volume (persistent)
+
+# ███████████████████████████████████████████████████████████████
+# 9. ENVIRONMENT VARIABLES (.env)
+# ███████████████████████████████████████████████████████████████
+
+# POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB — DB credentials
+# DATABASE_URL — async (postgresql+asyncpg://...) for FastAPI
+# ALEMBIC_DATABASE_URL — sync (postgresql://...) for Celery + Alembic
+# REDIS_URL — redis://redis:6379/0
+# OPENROUTER_API_KEY — for LLM calls (chat + pipeline)
+# OPENROUTER_BASE_URL — https://openrouter.ai/api/v1
+# DEFAULT_CHAT_MODEL — "openrouter/free" (auto-selects free models)
+# GEMINI_API_KEY — for embedding generation (FREE tier)
+# WORKSPACE_PATH — host path mounted into MCP containers (default: X:\)
+# AGENT_MAX_ITERATIONS — ReAct loop limit (default: 15)
+# MCP_TIMEOUT — timeout per MCP JSON-RPC call in seconds (default: 30)
+
+# ███████████████████████████████████████████████████████████████
+# 10. OPENROUTER MODEL IDS
+# ███████████████████████████████████████████████████████████████
+
+# VERIFIED FREE MODELS:
+#   - openrouter/free             — auto-selects available free model
+#   - meta-llama/llama-3.1-8b-instruct:free
+#   - qwen/qwen3-30b-a3b:free
+#   - deepseek/deepseek-r1:free
+#
+# PAID MODELS:
+#   - anthropic/claude-sonnet-4
+#   - openai/gpt-4o
+#   - google/gemini-2.0-flash-001
+#
+# NOTE: "openrouter/free" is the best default because OpenRouter
+# automatically picks a free model that supports the request features
+# (including tool/function calling when tools are present).
+
+# ███████████████████████████████████████████████████████████████
+# 11. AVAILABLE MCPs (seeded in db/seeds/seed_mcps.sql)
+# ███████████████████████████████████████████████████████████████
+
+# ┌──────────────────┬──────────────────────────────────────────┬───────────┐
+# │ MCP Name         │ Docker Image                             │ Category  │
+# ├──────────────────┼──────────────────────────────────────────┼───────────┤
+# │ mcp-filesystem   │ ghcr.io/mark3labs/mcp-filesystem-server  │ files     │
+# │ mcp-fetch        │ mcp/fetch:latest                         │ web       │
+# │ mcp-playwright   │ mcp/playwright:latest                    │ web       │
+# │ mcp-memory       │ mcp/memory:latest                        │ data      │
+# │ mcp-notion       │ mcp/notion:latest (needs API key)        │ communication│
+# │ mcp-slack        │ mcp/slack:latest (needs tokens)          │ communication│
+# │ mcp-gitlab       │ mcp/gitlab:latest (needs PAT)            │ development│
+# └──────────────────┴──────────────────────────────────────────┴───────────┘
+#
+# To add a new MCP: INSERT into the mcps table with run_config,
+# then run api/auto_embed.py to generate its embedding.
+
+# ███████████████████████████████████████████████████████████████
+# 12. PIPELINE NODES — WHAT EACH DOES
+# ███████████████████████████████████████████████████████████████
+
+# N1  query_analyzer       — LLM expands user query → search sub-queries
+# N2  similarity_retriever — pgvector cosine search on MCPs + Skills
+# N3  needs_assessment     — LLM checks if tools cover the task
+#       ├─ "proceed"       → N6
+#       └─ "create_skill"  → N4
+# N4  skill_creator        — LLM generates Python skill code + saves to DB
+# N5  sandbox_validator    — Tests skill in sandboxed Docker container
+#       └─ always → N6
+# N6  ai_final_filter      — LLM selects minimum necessary tools
+# N7  docker_mcp_runner    — Validates configs, pre-pulls Docker images
+#                            (containers start at CHAT time, NOT here)
+# N8  template_builder     — LLM creates agent config (name, prompt, model)
+#       ★ _inject_mcp_metadata() merges docker_image + run_config into
+#         the LLM output (LLM can't be trusted to preserve these)
+# N9  final_output         — Validates template, adds pipeline metadata
+
+# ███████████████████████████████████████████████████████████████
+# 13. CRITICAL PATTERNS & GOTCHAS
+# ███████████████████████████████████████████████████████████████
+
+# ❗ SYNC vs ASYNC DATABASE:
+#   - FastAPI uses ASYNC engine (asyncpg): core/db.py
+#   - Celery uses SYNC engine (psycopg2): ALEMBIC_DATABASE_URL
+#   - Never use async engine in Celery tasks
+#   - chat.py uses sync engine (create_engine) because it runs
+#     inside a FastAPI async endpoint but needs simple DB access
+
+# ❗ MCP METADATA INJECTION:
+#   The LLM in template_builder only outputs {name, running_port} for MCPs.
+#   The critical docker_image and run_config are LOST if not injected.
+#   _inject_mcp_metadata() in template_builder.py fixes this by merging
+#   the full metadata from the pipeline state (selected_tools, running_mcps).
+#   If you modify template_builder, ALWAYS ensure this injection happens.
+
+# ❗ DOCKER-IN-DOCKER:
+#   The API container has Docker CLI + socket mount. It starts MCP containers
+#   as sibling containers (not nested). The docker command runs via
+#   asyncio.create_subprocess_exec in mcp_client.py.
+
+# ❗ SESSION LIFECYCLE:
+#   MCP containers are started on FIRST chat message and live in memory
+#   (core/agent_session.py → _sessions dict). They are cleaned up:
+#   - On explicit DELETE /chat/{conv_id}/session
+#   - On API shutdown (cleanup_all_sessions in main.py lifespan)
+#   - NOT automatically on timeout (TODO)
+
+# ❗ TOOL CALL FORMAT CONVERSION:
+#   MCP tools use:   {name, description, inputSchema}
+#   OpenRouter uses: {type: "function", function: {name, description, parameters}}
+#   Conversion: mcp_tools_to_openrouter() in core/mcp_client.py
+
+# ❗ PATH MAPPING:
+#   Users reference Windows paths (X:\AI). MCP containers see /workspace.
+#   The agent_loop.py injects a "Path Mapping (CRITICAL)" section into
+#   the system prompt to tell the LLM to use /workspace/... paths.
+#   If the LLM ignores this, tools return "access denied" errors.
+
+# ❗ API KEY HANDLING FOR MCPs:
+#   MCPs like Slack/Notion need API keys. In run_config.environment,
+#   keys with value "REQUIRED" are skipped. Real values are pulled
+#   from the host environment (os.getenv) in mcp_client.py.
+
+# ███████████████████████████████████████████████████████████████
+# 14. COMMON OPERATIONS
+# ███████████████████████████████████████████████████████████████
+
+# START THE SYSTEM:
+#   docker-compose up -d --build
+#
+# SEED THE DATABASE (if mcps table is empty):
+#   docker exec -i agentbuilder-db psql -U agentbuilder -d agentbuilder_db \
+#     -f /docker-entrypoint-initdb.d/seeds/seed_mcps.sql
+#
+# GENERATE EMBEDDINGS (after seeding):
+#   docker exec agentbuilder-api python /app/api/auto_embed.py
+#
+# VIEW LOGS:
+#   docker-compose logs -f api worker
+#
+# REBUILD SINGLE SERVICE:
+#   docker-compose up -d --build api
+#
+# ADD A NEW MCP:
+#   1. Add INSERT to db/seeds/seed_mcps.sql with run_config
+#   2. Run seed command above
+#   3. Run auto_embed.py
+#   4. No code changes needed — the pipeline finds it automatically
+
+# ███████████████████████████████████████████████████████████████
+# 15. API ENDPOINTS
+# ███████████████████████████████████████████████████████████████
+
+# BUILD:
+#   POST /api/v1/build           — Submit build request
+#     Body: {query, preferred_model?, max_mcps?, enable_skill_creation?}
+#     Returns: {task_id, status: "queued"}
+#
+# STATUS:
+#   GET /api/v1/status/{task_id} — Poll build progress
+#     Returns: {status, current_node, progress (0-1), result_template}
+#
+# CHAT:
+#   POST /api/v1/chat/{task_id}  — Chat with built agent
+#     Body: {message, conversation_id?, model?}
+#     Returns: {response, tool_calls[], agent_name, model, iterations, mcps_connected}
+#
+#   GET /api/v1/chat/{task_id}/info — Get agent configuration
+#   DELETE /api/v1/chat/{conv_id}/session — End session, stop containers
+#
+# DISCOVERY:
+#   GET /api/v1/templates        — List completed agent templates
+#   GET /api/v1/mcps             — List available MCPs
+#   GET /api/v1/skills           — List skills
+#
+# HEALTH:
+#   GET /health                  — Health check
+
+# ███████████████████████████████████████████████████████████████
+# 16. FRONTEND PAGES
+# ███████████████████████████████████████████████████████████████
+
+# index.html (port 3000, served by nginx):
+#   - "Build New Agent" form: query input, model selector, MCP count
+#   - Polls GET /status/{task_id} for real-time progress bar
+#   - "Previous Builds" section lists completed agents with "Chat" buttons
+#   - Uses app.js for polling logic and form submission
+#
+# chat.html (port 3000/chat.html?task_id=...):
+#   - Loads agent info via GET /chat/{task_id}/info
+#   - Shows connected MCPs as badges in header
+#   - Model selector dropdown (free + paid options)
+#   - Messages area with:
+#     - User bubbles (purple gradient)
+#     - Agent bubbles (dark bg) with optional tool call cards above
+#     - Tool call cards are collapsible: click to see args + result
+#   - Status bar shows "🧠 Thinking & using tools..." during requests
+#   - Suggestion chips for first message
+
+# ███████████████████████████████████████████████████████████████
+# 17. CODING CONVENTIONS
+# ███████████████████████████████████████████████████████████████
+
+# - Python 3.11, type hints everywhere (str | None, list[dict])
+# - Logging: use module-level logger = logging.getLogger(__name__)
+# - Emoji in log messages for pipeline nodes (🔍 🔎 📋 ⚒️ 🧪 🎯 🐳 📋 📦)
+# - Error handling: always catch + log + return fallback (never crash pipeline)
+# - DB sessions: use create_engine() + Session() for sync, get_db() for async
+# - OpenRouter calls: use openrouter_client singleton (core/openrouter.py)
+# - JSON from LLM: use chat_completion_json() which handles markdown, single quotes, etc.
+# - MCP operations: always use MCPContainerSession (never raw Docker SDK for chat)
+# - Frontend: vanilla HTML/CSS/JS, no frameworks, fetch() for API calls
+
+# ███████████████████████████████████████████████████████████████
+# 18. KNOWN ISSUES & TODO
+# ███████████████████████████████████████████████████████████████
+
+# TODO: Session timeout — MCP containers don't auto-cleanup on inactivity
+# TODO: Streaming responses — currently waits for full ReAct loop to finish
+# TODO: Multi-agent execution — template supports multi_agent but chat.py
+#       only uses agents[0]
+# TODO: Skill execution in chat — skills are created/validated but not
+#       integrated into the chat agent loop
+# TODO: api/config.py still has hardcoded default_chat_model as nemotron
+#       (overridden by .env but should be updated for consistency)
+# TODO: UI for MCP API key management (Slack/Notion/GitLab tokens)
+# TODO: Conversation persistence — history is in-memory, lost on restart

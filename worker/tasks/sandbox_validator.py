@@ -16,14 +16,15 @@ from core.models import Skill
 
 logger = logging.getLogger(__name__)
 
-SYNC_DB_URL = os.getenv(
-    "ALEMBIC_DATABASE_URL",
-    "postgresql://agentbuilder:secure_password_change_me@db:5432/agentbuilder_db",
-)
+_SYNC_DB_URL = os.getenv("ALEMBIC_DATABASE_URL", "").strip()
+if not _SYNC_DB_URL:
+    raise RuntimeError(
+        "ALEMBIC_DATABASE_URL is required for sandbox_validator (sync PostgreSQL URL)."
+    )
 
 
 def get_sync_session() -> Session:
-    engine = create_engine(SYNC_DB_URL)
+    engine = create_engine(_SYNC_DB_URL)
     return Session(engine)
 
 

@@ -15,18 +15,18 @@ from core.models import BuildHistory
 
 logger = logging.getLogger(__name__)
 
-# Sync engine for Celery (Celery doesn't support async natively)
 import os
 
-SYNC_DB_URL = os.getenv(
-    "ALEMBIC_DATABASE_URL",
-    "postgresql://agentbuilder:secure_password_change_me@db:5432/agentbuilder_db",
-)
+_SYNC_DB_URL = os.getenv("ALEMBIC_DATABASE_URL", "").strip()
+if not _SYNC_DB_URL:
+    raise RuntimeError(
+        "ALEMBIC_DATABASE_URL is required for the worker (sync URL, e.g. postgresql://user:pass@db:5432/dbname)."
+    )
 
 
 def get_sync_session() -> Session:
     """Create a sync database session for Celery tasks."""
-    engine = create_engine(SYNC_DB_URL)
+    engine = create_engine(_SYNC_DB_URL)
     return Session(engine)
 
 

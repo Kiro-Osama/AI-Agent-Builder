@@ -1,4 +1,4 @@
-"""Initial schema - MCPs, Skills, BuildHistory (384-dim vectors)
+"""Initial schema - MCPs, Skills, BuildHistory (768-dim vectors)
 
 Revision ID: 001
 Revises: None

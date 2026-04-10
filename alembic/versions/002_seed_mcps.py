@@ -1,11 +1,23 @@
--- ============================================
--- Agent Builder System V5 - Real MCP Seed Data
--- Uses OFFICIAL Docker Hub MCP images (mcp/ namespace)
--- Each MCP has a run_config explaining HOW to launch it
--- Embeddings will be auto-generated at startup
--- ============================================
+"""Seed default MCPs (7 rows, idempotent via ON CONFLICT)
 
--- 1. Filesystem MCP (ghcr.io - verified working)
+Revision ID: 002
+Revises: 001
+Create Date: 2026-04-09
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+
+revision: str = "002"
+down_revision: Union[str, None] = "001"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    op.execute(
+        """
 INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config)
 VALUES (
     'mcp-filesystem',
@@ -36,8 +48,10 @@ ON CONFLICT (mcp_name) DO UPDATE SET
     tools_provided = EXCLUDED.tools_provided,
     category = EXCLUDED.category,
     run_config = EXCLUDED.run_config;
-
--- 2. Fetch MCP (Official Docker Hub - mcp/fetch, 54 stars)
+"""
+    )
+    op.execute(
+        """
 INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config)
 VALUES (
     'mcp-fetch',
@@ -62,8 +76,10 @@ ON CONFLICT (mcp_name) DO UPDATE SET
     tools_provided = EXCLUDED.tools_provided,
     category = EXCLUDED.category,
     run_config = EXCLUDED.run_config;
-
--- 3. Playwright Browser Automation MCP (Official Docker Hub - mcp/playwright, 32 stars)
+"""
+    )
+    op.execute(
+        """
 INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config)
 VALUES (
     'mcp-playwright',
@@ -92,8 +108,10 @@ ON CONFLICT (mcp_name) DO UPDATE SET
     tools_provided = EXCLUDED.tools_provided,
     category = EXCLUDED.category,
     run_config = EXCLUDED.run_config;
-
--- 4. Memory MCP (Official Docker Hub - mcp/memory, 27 stars)
+"""
+    )
+    op.execute(
+        """
 INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config)
 VALUES (
     'mcp-memory',
@@ -122,8 +140,10 @@ ON CONFLICT (mcp_name) DO UPDATE SET
     tools_provided = EXCLUDED.tools_provided,
     category = EXCLUDED.category,
     run_config = EXCLUDED.run_config;
-
--- 5. Notion MCP (Official Docker Hub - mcp/notion, 34 stars)
+"""
+    )
+    op.execute(
+        """
 INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config)
 VALUES (
     'mcp-notion',
@@ -152,8 +172,10 @@ ON CONFLICT (mcp_name) DO UPDATE SET
     tools_provided = EXCLUDED.tools_provided,
     category = EXCLUDED.category,
     run_config = EXCLUDED.run_config;
-
--- 6. Slack MCP (Official Docker Hub - mcp/slack, 24 stars)
+"""
+    )
+    op.execute(
+        """
 INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config)
 VALUES (
     'mcp-slack',
@@ -181,8 +203,10 @@ ON CONFLICT (mcp_name) DO UPDATE SET
     tools_provided = EXCLUDED.tools_provided,
     category = EXCLUDED.category,
     run_config = EXCLUDED.run_config;
-
--- 7. GitLab MCP (Official Docker Hub - mcp/gitlab, 24 stars)
+"""
+    )
+    op.execute(
+        """
 INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config)
 VALUES (
     'mcp-gitlab',
@@ -211,3 +235,21 @@ ON CONFLICT (mcp_name) DO UPDATE SET
     tools_provided = EXCLUDED.tools_provided,
     category = EXCLUDED.category,
     run_config = EXCLUDED.run_config;
+"""
+    )
+
+
+def downgrade() -> None:
+    op.execute(
+        """
+DELETE FROM mcps WHERE mcp_name IN (
+    'mcp-filesystem',
+    'mcp-fetch',
+    'mcp-playwright',
+    'mcp-memory',
+    'mcp-notion',
+    'mcp-slack',
+    'mcp-gitlab'
+);
+"""
+    )
