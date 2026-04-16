@@ -43,9 +43,30 @@ async def similarity_retriever(state: AgentBuilderState) -> dict:
     retrieved_skills = []
 
     try:
-        # Generate embedding for the combined query
-        combined_query = " ".join(sub_queries)
-        query_embedding = await embedding_generator.generate(combined_query)
+        # Two search channels: MCP catalog vs skills catalog (Query Analyzer orders sub_queries)
+        n = len(sub_queries)
+        if n >= 2:
+            if n == 2:
+                mcp_search_text = sub_queries[0].strip()
+                skill_search_text = sub_queries[1].strip()
+            else:
+                mid = max(1, (n + 1) // 2)
+                mcp_search_text = " ".join(sub_queries[:mid]).strip()
+                skill_search_text = " ".join(sub_queries[mid:]).strip()
+            if not skill_search_text:
+                skill_search_text = mcp_search_text
+            if not mcp_search_text:
+                mcp_search_text = skill_search_text
+            logger.info(
+                "  Dual embedding search (MCP vs skills): %d / %d chars",
+                len(mcp_search_text),
+                len(skill_search_text),
+            )
+            mcp_embedding = await embedding_generator.generate(mcp_search_text)
+            skill_embedding = await embedding_generator.generate(skill_search_text)
+        else:
+            combined_query = " ".join(sub_queries).strip() or state["user_query"]
+            mcp_embedding = skill_embedding = await embedding_generator.generate(combined_query)
 
         session = _get_session()
         try:
@@ -67,7 +88,7 @@ async def similarity_retriever(state: AgentBuilderState) -> dict:
                         ORDER BY embedding <=> CAST(:query_vec AS vector)
                         LIMIT :limit
                     """),
-                    {"query_vec": str(query_embedding), "limit": max_mcps},
+                    {"query_vec": str(mcp_embedding), "limit": max_mcps},
                 ).fetchall()
 
                 for row in mcp_results:
@@ -129,7 +150,7 @@ async def similarity_retriever(state: AgentBuilderState) -> dict:
                         ORDER BY embedding <=> CAST(:query_vec AS vector)
                         LIMIT 8
                     """),
-                    {"query_vec": str(query_embedding)},
+                    {"query_vec": str(skill_embedding)},
                 ).fetchall()
 
                 for row in skill_results:

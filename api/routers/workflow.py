@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
 from core.db import get_db
+from core.mcp_user_config import mcp_config_required_for_modal
 from core.models import Workflow, WorkflowExecution, BuildHistory
 from core.workflow_session import (
     WorkflowSession,
@@ -389,7 +390,7 @@ async def get_workflow_chat_info(
         raise HTTPException(404, "Workflow not found")
 
     agents_info = []
-    config_required = []
+    all_mcps: list[dict] = []
     for agent_def in (wf.agents or []):
         agents_info.append({
             "role": agent_def.get("role", ""),
@@ -399,12 +400,8 @@ async def get_workflow_chat_info(
             "mcps_count": len(agent_def.get("selected_mcps", [])),
             "skills_count": len(agent_def.get("selected_skills", [])),
         })
-        for mcp in agent_def.get("selected_mcps", []):
-            if mcp.get("requires_user_config"):
-                config_required.append({
-                    "mcp_name": mcp.get("mcp_name"),
-                    "config_schema": mcp.get("config_schema", []),
-                })
+        all_mcps.extend(agent_def.get("selected_mcps", []))
+    config_required = await mcp_config_required_for_modal(db, all_mcps)
 
     routing = (wf.workflow_config or {}).get("routing_rules", {})
 

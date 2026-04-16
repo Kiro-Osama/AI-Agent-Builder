@@ -30,6 +30,7 @@ from core.agent_session import (
     session_key as composite_session_key,
 )
 from core.db import get_db
+from core.mcp_user_config import mcp_config_required_for_modal
 from core.models import BuildHistory
 from core.ollama_client import use_llm_provider
 
@@ -194,20 +195,15 @@ async def get_agent_info(task_id: str, db: AsyncSession = Depends(get_db)):
     agents = template.get("agents", [])
     agent = agents[0] if agents else {}
 
-    config_required = []
-    for mcp in agent.get("selected_mcps", []):
-        if mcp.get("requires_user_config"):
-            config_required.append({
-                "mcp_name": mcp.get("mcp_name"),
-                "config_schema": mcp.get("config_schema", []),
-            })
+    selected_mcps = agent.get("selected_mcps", [])
+    config_required = await mcp_config_required_for_modal(db, selected_mcps)
 
     return {
         "task_id": task_id,
         "agent_name": agent.get("agent_name", "AI_Assistant"),
         "model": agent.get("assigned_openrouter_model", "unknown"),
         "system_prompt": agent.get("system_prompt", ""),
-        "selected_mcps": agent.get("selected_mcps", []),
+        "selected_mcps": selected_mcps,
         "selected_skills": agent.get("selected_skills", []),
         "project_type": template.get("project_type", "single_agent"),
         "user_query": build.user_query,
