@@ -65,6 +65,7 @@
             <div class="build-tabs">
                 <button class="build-tab active" onclick="switchBuildTab('ai')" id="tabAI">AI Build</button>
                 <button class="build-tab" onclick="switchBuildTab('manual')" id="tabManual">Manual Build</button>
+                <button class="build-tab" onclick="switchBuildTab('workflow')" id="tabWorkflow">Workflow Build</button>
             </div>
 
             <!-- AI Build -->
@@ -81,6 +82,14 @@
                     </div>
                     <div class="form-options">
                         <div class="option-group">
+                            <label>LLM provider</label>
+                            <select id="llmProviderSelect" title="OpenRouter cloud; Ollama local (OLLAMA_BASE_URL); Ollama remote (OLLAMA_REMOTE_BASE_URL, e.g. ngrok)">
+                                <option value="openrouter" selected>OpenRouter</option>
+                                <option value="ollama">Ollama (local)</option>
+                                <option value="ollama_remote">Ollama (remote / tunnel)</option>
+                            </select>
+                        </div>
+                        <div class="option-group" id="aiModelGroup">
                             <label>Model Preference</label>
                             <select id="modelSelect">
                                 <option value="">Auto-select (recommended)</option>
@@ -123,6 +132,14 @@
                             <input type="text" id="manualAgentName" value="Custom_Agent" placeholder="My Agent" style="padding:10px 14px;background:var(--bg-glass);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:0.9rem;outline:none;width:100%;">
                         </div>
                         <div class="option-group">
+                            <label>LLM provider</label>
+                            <select id="manualLlmProvider" title="Remote: set OLLAMA_REMOTE_BASE_URL + OLLAMA_REMOTE_API_KEY in .env">
+                                <option value="openrouter" selected>OpenRouter</option>
+                                <option value="ollama">Ollama (local)</option>
+                                <option value="ollama_remote">Ollama (remote)</option>
+                            </select>
+                        </div>
+                        <div class="option-group" id="manualModelGroup">
                             <label>Model</label>
                             <select id="manualModel">
                                 <option value="google/gemma-3-27b-it:free">Gemma 3 27B (Free)</option>
@@ -162,6 +179,77 @@
                     </button>
                 </div>
             </div>
+
+            <!-- Workflow Build -->
+            <div class="build-tab-content hidden" id="workflowBuildContent">
+                <p class="subtitle">Describe a complex task. The system will decompose it into multiple agents, choose a topology, and build each agent automatically.</p>
+                <div class="build-form">
+                    <div class="textarea-wrapper">
+                        <textarea
+                            id="wfQueryInput"
+                            placeholder="Example: Build a full-stack app review system: one agent audits the frontend UX, another checks backend performance, a third reviews security, and a supervisor combines the reports..."
+                            rows="4"
+                        ></textarea>
+                    </div>
+                    <div class="form-options">
+                        <div class="option-group">
+                            <label>LLM provider</label>
+                            <select id="wfLlmProvider" title="Applies to workflow planning and each sub-agent build">
+                                <option value="openrouter" selected>OpenRouter</option>
+                                <option value="ollama">Ollama (local)</option>
+                                <option value="ollama_remote">Ollama (remote)</option>
+                            </select>
+                        </div>
+                        <div class="option-group">
+                            <label>Topology Preference</label>
+                            <select id="wfTopology">
+                                <option value="auto">Auto-detect (recommended)</option>
+                                <option value="sequential">Sequential (pipeline)</option>
+                                <option value="parallel">Parallel (fork-join)</option>
+                                <option value="supervisor">Supervisor (hierarchy)</option>
+                                <option value="swarm">Swarm (peer handoff)</option>
+                            </select>
+                        </div>
+                        <div class="option-group" id="wfModelGroup">
+                            <label>Model Preference</label>
+                            <select id="wfModel">
+                                <option value="">Auto-select (recommended)</option>
+                                <option value="google/gemma-3-27b-it:free">Gemma 3 27B (Free)</option>
+                                <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (Free)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button class="btn-build" id="wfBuildBtn" onclick="submitWorkflowBuild()">
+                        <span class="btn-icon">🔀</span>
+                        <span>Build Workflow</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Workflow Pipeline Status -->
+        <section class="section wf-pipeline-section hidden" id="wfPipelineSection">
+            <div class="section-header">
+                <h2>🔀 Workflow Build Progress</h2>
+                <span class="task-id" id="wfIdDisplay"></span>
+            </div>
+            <div class="wf-status-bar">
+                <span class="wf-status-label" id="wfStatusLabel">Queued</span>
+                <span class="wf-topology-badge" id="wfTopologyBadge"></span>
+            </div>
+            <div class="wf-agents-progress" id="wfAgentsProgress"></div>
+        </section>
+
+        <!-- Workflow Result -->
+        <section class="section wf-result-section hidden" id="wfResultSection">
+            <div class="section-header">
+                <h2>🎉 Workflow Ready</h2>
+                <div class="result-actions">
+                    <button class="btn-primary" onclick="chatWithWorkflow()" style="background:var(--accent-gradient);border:none;padding:8px 20px;border-radius:8px;color:white;cursor:pointer;font-family:'Inter',sans-serif;font-size:14px;font-weight:600;">💬 Chat with Workflow</button>
+                    <button class="btn-secondary" onclick="newBuild()">🔄 New Build</button>
+                </div>
+            </div>
+            <div class="wf-result-details" id="wfResultDetails"></div>
         </section>
 
         <!-- Pipeline Status Section -->

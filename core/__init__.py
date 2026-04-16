@@ -4,7 +4,7 @@ Core — Shared libraries used by API and Worker.
 Modules:
     models          SQLAlchemy ORM models (BuildHistory, MCP, Skill)
     db              Async database engine and session factory
-    openrouter      Multi-model LLM client with retry and fallback
+    openrouter      LLM client: OpenRouter + optional local Ollama (see LLM_PROVIDER / ollama: prefix)
     embeddings      Google Gemini embedding client
     mcp_client      JSON-RPC client for MCP Docker containers
     agent_session   MCP container session manager for chat

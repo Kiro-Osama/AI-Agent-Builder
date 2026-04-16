@@ -31,6 +31,7 @@ async def build_agent(
         task_id = await dispatch_build_task(
             query=request.query,
             preferred_model=request.preferred_model,
+            llm_provider=request.llm_provider,
             max_mcps=request.max_mcps,
             enable_skill_creation=request.enable_skill_creation,
             db=db,

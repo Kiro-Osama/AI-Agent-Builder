@@ -1211,6 +1211,189 @@ select:focus {
     color: var(--accent-yellow);
 }
 
+/* ============================
+   Workflow Build Styles
+   ============================ */
+
+.wf-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.wf-status-label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    padding: 4px 14px;
+    border-radius: 20px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border-color);
+}
+.wf-status-label.wf-status-planning { color: var(--accent-yellow); border-color: rgba(245,158,11,0.3); }
+.wf-status-label.wf-status-building { color: var(--accent-blue); border-color: rgba(37,99,235,0.3); }
+.wf-status-label.wf-status-ready { color: var(--accent-green); border-color: rgba(16,185,129,0.3); }
+.wf-status-label.wf-status-failed { color: #ef4444; border-color: rgba(239,68,68,0.3); }
+
+.wf-topology-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 3px 12px;
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.topo-sequential { background: rgba(37,99,235,0.15); color: #60a5fa; }
+.topo-parallel { background: rgba(16,185,129,0.15); color: #34d399; }
+.topo-supervisor { background: rgba(124,58,237,0.15); color: #a78bfa; }
+.topo-swarm { background: rgba(245,158,11,0.15); color: #fbbf24; }
+
+.wf-agents-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.wf-agent-card {
+    padding: 14px 18px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-glass);
+    border: 1px solid var(--border-color);
+    transition: border-color 0.2s;
+}
+.wf-agent-card.wf-agent-active { border-color: var(--accent-blue); }
+.wf-agent-card.wf-agent-completed { border-color: var(--accent-green); }
+.wf-agent-card.wf-agent-failed { border-color: #ef4444; }
+
+.wf-agent-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.wf-agent-role {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    background: rgba(255,255,255,0.04);
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.wf-agent-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.88rem;
+}
+
+.wf-agent-task {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    margin-top: 6px;
+    line-height: 1.4;
+}
+
+.wf-agent-status {
+    font-size: 0.75rem;
+    font-weight: 500;
+    margin-left: auto;
+}
+.wf-agent-status.completed { color: var(--accent-green); }
+.wf-agent-status.active { color: var(--accent-blue); }
+.wf-agent-status.failed { color: #ef4444; }
+.wf-agent-status.pending { color: var(--text-muted); }
+
+/* Workflow Result */
+.wf-result-meta {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.wf-result-meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.wf-result-meta-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.wf-result-meta-value {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.wf-result-agents {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.wf-result-agent-card {
+    padding: 14px 18px;
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--border-color);
+}
+
+.wf-result-agent-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.wf-result-agent-idx {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent-gradient);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.wf-result-agent-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.wf-result-agent-role {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.wf-result-agent-task {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    margin-top: 6px;
+    line-height: 1.4;
+}
+
+.wf-result-agent-meta {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    margin-top: 8px;
+}
+
 /* --- Responsive --- */
 @media (max-width: 640px) {
     .header { padding: 12px 16px; }
@@ -1219,4 +1402,5 @@ select:focus {
     .form-options { flex-direction: column; }
     .mcps-grid { grid-template-columns: 1fr; }
     .manual-picker-row { grid-template-columns: 1fr; }
+    .wf-result-meta { flex-direction: column; gap: 12px; }
 }

@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
-from api.routers import build, status, templates, chat, embeddings, skills_seed, admin, manual_build
+from api.routers import build, status, templates, chat, embeddings, skills_seed, admin, manual_build, workflow
 
 # -----------------------------------------------
 # Logging setup
@@ -62,6 +62,10 @@ async def lifespan(app: FastAPI):
 
     await cleanup_all_sessions()
 
+    from core.workflow_session import cleanup_all_workflow_sessions
+
+    await cleanup_all_workflow_sessions()
+
     from core.shared_mcp_pool import shared_pool
 
     await shared_pool.shutdown()
@@ -102,6 +106,7 @@ app.include_router(embeddings.router, prefix="/api/v1", tags=["Embeddings"])
 app.include_router(skills_seed.router, prefix="/api/v1", tags=["Skills Seed"])
 app.include_router(admin.router, prefix="/api/v1", tags=["Admin"])
 app.include_router(manual_build.router, prefix="/api/v1", tags=["Manual Build"])
+app.include_router(workflow.router, prefix="/api/v1", tags=["Workflows"])
 
 
 # -----------------------------------------------

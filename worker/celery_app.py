@@ -41,6 +41,7 @@ app.conf.update(
     # Task routes
     task_routes={
         "worker.tasks.build_agent.*": {"queue": "build"},
+        "worker.tasks.build_workflow.*": {"queue": "build"},
         "worker.tasks.sandbox_validator.*": {"queue": "sandbox"},
     },
 
@@ -51,5 +52,6 @@ app.conf.update(
 # Explicitly import task modules so Celery registers them
 app.conf.imports = [
     "worker.tasks.build_agent",
-    "worker.tasks.sandbox_validator"
+    "worker.tasks.build_workflow",
+    "worker.tasks.sandbox_validator",
 ]

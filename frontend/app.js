@@ -27,7 +27,52 @@ document.addEventListener('DOMContentLoaded', () => {
     loadSkills();
     loadEmbeddingStatus();
     setupCharCounter();
+    const lp = document.getElementById('llmProviderSelect');
+    if (lp) {
+        lp.addEventListener('change', syncAiProviderUi);
+        syncAiProviderUi();
+    }
+    const mlp = document.getElementById('manualLlmProvider');
+    if (mlp) {
+        mlp.addEventListener('change', syncManualProviderUi);
+        syncManualProviderUi();
+    }
+    const wflp = document.getElementById('wfLlmProvider');
+    if (wflp) {
+        wflp.addEventListener('change', syncWfProviderUi);
+        syncWfProviderUi();
+    }
 });
+
+function syncAiProviderUi() {
+    const prov = document.getElementById('llmProviderSelect');
+    const grp = document.getElementById('aiModelGroup');
+    if (!prov || !grp) return;
+    const ollama = prov.value === 'ollama' || prov.value === 'ollama_remote';
+    const sel = grp.querySelector('select');
+    if (sel) sel.disabled = ollama;
+    grp.style.opacity = ollama ? '0.5' : '1';
+}
+
+function syncManualProviderUi() {
+    const prov = document.getElementById('manualLlmProvider');
+    const grp = document.getElementById('manualModelGroup');
+    if (!prov || !grp) return;
+    const ollama = prov.value === 'ollama' || prov.value === 'ollama_remote';
+    const sel = grp.querySelector('select');
+    if (sel) sel.disabled = ollama;
+    grp.style.opacity = ollama ? '0.5' : '1';
+}
+
+function syncWfProviderUi() {
+    const prov = document.getElementById('wfLlmProvider');
+    const grp = document.getElementById('wfModelGroup');
+    if (!prov || !grp) return;
+    const ollama = prov.value === 'ollama' || prov.value === 'ollama_remote';
+    const sel = grp.querySelector('select');
+    if (sel) sel.disabled = ollama;
+    grp.style.opacity = ollama ? '0.5' : '1';
+}
 
 function setupCharCounter() {
     const textarea = document.getElementById('queryInput');
@@ -75,9 +120,13 @@ async function submitBuild() {
     btn.disabled = true;
     btn.innerHTML = '<span class="btn-icon">⏳</span><span>Submitting...</span>';
 
+    const provEl = document.getElementById('llmProviderSelect');
+    const llmProv = provEl ? provEl.value : 'openrouter';
+    const useOllama = llmProv === 'ollama' || llmProv === 'ollama_remote';
     const payload = {
         query: query,
-        preferred_model: document.getElementById('modelSelect').value || null,
+        llm_provider: llmProv,
+        preferred_model: useOllama ? null : (document.getElementById('modelSelect').value || null),
         max_mcps: parseInt(document.getElementById('maxMcps').value),
         enable_skill_creation: document.getElementById('enableSkills').checked,
     };
@@ -584,8 +633,10 @@ async function seedSkills() {
 function switchBuildTab(tab) {
     document.getElementById('tabAI').classList.toggle('active', tab === 'ai');
     document.getElementById('tabManual').classList.toggle('active', tab === 'manual');
+    document.getElementById('tabWorkflow').classList.toggle('active', tab === 'workflow');
     document.getElementById('aiBuildContent').classList.toggle('hidden', tab !== 'ai');
     document.getElementById('manualBuildContent').classList.toggle('hidden', tab !== 'manual');
+    document.getElementById('workflowBuildContent').classList.toggle('hidden', tab !== 'workflow');
     if (tab === 'manual') {
         populateManualPickers();
     }
@@ -698,6 +749,7 @@ async function submitManualBuild() {
                 selected_mcp_ids: selectedMcpIds,
                 selected_skill_ids: selectedSkillIds,
                 model: model,
+                llm_provider: (document.getElementById('manualLlmProvider') || { value: 'openrouter' }).value,
             }),
         });
 
@@ -739,4 +791,203 @@ function escapeHtml(str) {
 function truncate(str, len) {
     if (!str) return '';
     return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+// -----------------------------------------------
+// Workflow Build
+// -----------------------------------------------
+let currentWorkflowId = null;
+let wfPollInterval = null;
+
+async function submitWorkflowBuild() {
+    const query = document.getElementById('wfQueryInput').value.trim();
+    if (!query || query.length < 10) {
+        showToast('Please enter a detailed task description (min 10 characters)', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('wfBuildBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="btn-icon">⏳</span><span>Submitting...</span>';
+
+    const wfProvEl = document.getElementById('wfLlmProvider');
+    const wfLlmProv = wfProvEl ? wfProvEl.value : 'openrouter';
+    const wfOllama = wfLlmProv === 'ollama' || wfLlmProv === 'ollama_remote';
+    const payload = {
+        query: query,
+        topology_hint: document.getElementById('wfTopology').value || 'auto',
+        llm_provider: wfLlmProv,
+        preferred_model: wfOllama ? null : (document.getElementById('wfModel').value || null),
+    };
+
+    try {
+        const res = await fetch(`${API_BASE}/workflow/build`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Workflow build failed');
+        }
+
+        const data = await res.json();
+        currentWorkflowId = data.workflow_id;
+
+        showToast('Workflow build submitted!', 'success');
+        showWorkflowPipeline(currentWorkflowId);
+        startWorkflowPolling(currentWorkflowId);
+
+    } catch (e) {
+        showToast(`Error: ${e.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span class="btn-icon">🔀</span><span>Build Workflow</span>';
+    }
+}
+
+function showWorkflowPipeline(wfId) {
+    document.getElementById('wfPipelineSection').classList.remove('hidden');
+    document.getElementById('wfResultSection').classList.add('hidden');
+    document.getElementById('wfIdDisplay').textContent = `Workflow: ${wfId}`;
+    document.getElementById('wfAgentsProgress').innerHTML = '<div class="loading-placeholder">Planning workflow...</div>';
+    document.getElementById('wfStatusLabel').textContent = 'Queued';
+    document.getElementById('wfTopologyBadge').textContent = '';
+}
+
+function startWorkflowPolling(wfId) {
+    if (wfPollInterval) clearInterval(wfPollInterval);
+    wfPollInterval = setInterval(() => pollWorkflowStatus(wfId), 3000);
+}
+
+async function pollWorkflowStatus(wfId) {
+    try {
+        const res = await fetch(`${API_BASE}/workflow/${wfId}`);
+        if (!res.ok) return;
+
+        const data = await res.json();
+        updateWorkflowPipelineUI(data);
+
+        if (data.status === 'ready' || data.status === 'failed') {
+            clearInterval(wfPollInterval);
+            wfPollInterval = null;
+
+            if (data.status === 'ready') {
+                showWorkflowResult(data);
+            } else {
+                showToast(`Workflow build failed: ${data.error_log || 'Unknown error'}`, 'error');
+            }
+        }
+    } catch (e) {
+        console.error('Workflow poll error:', e);
+    }
+}
+
+function updateWorkflowPipelineUI(data) {
+    const statusLabel = document.getElementById('wfStatusLabel');
+    const topoBadge = document.getElementById('wfTopologyBadge');
+    const agentsDiv = document.getElementById('wfAgentsProgress');
+
+    const statusMap = {
+        queued: 'Queued',
+        planning: 'Planning...',
+        building: 'Building Agents...',
+        ready: 'Ready',
+        failed: 'Failed',
+    };
+
+    statusLabel.textContent = statusMap[data.status] || data.status;
+    statusLabel.className = `wf-status-label wf-status-${data.status}`;
+
+    if (data.topology) {
+        topoBadge.textContent = data.topology;
+        topoBadge.className = `wf-topology-badge topo-${data.topology}`;
+    }
+
+    const agentBuilds = data.agent_build_status || [];
+    if (agentBuilds.length === 0 && data.status === 'planning') {
+        agentsDiv.innerHTML = '<div class="loading-placeholder">AI is decomposing the task into agents...</div>';
+        return;
+    }
+
+    if (agentBuilds.length === 0 && data.agents && data.agents.length) {
+        agentsDiv.innerHTML = data.agents.map(a => `
+            <div class="wf-agent-card">
+                <div class="wf-agent-header">
+                    <span class="wf-agent-role">${escapeHtml(a.role || '')}</span>
+                    <span class="wf-agent-name">${escapeHtml(a.agent_name || '')}</span>
+                </div>
+                <div class="wf-agent-task">${escapeHtml(a.sub_task || '')}</div>
+                <span class="wf-agent-status pending">Pending</span>
+            </div>
+        `).join('');
+        return;
+    }
+
+    agentsDiv.innerHTML = agentBuilds.map(ab => {
+        const statusClass = ab.status === 'completed' ? 'completed' :
+                           ab.status === 'failed' ? 'failed' :
+                           ab.status === 'processing' ? 'active' : 'pending';
+        const statusIcon = ab.status === 'completed' ? '✅' :
+                          ab.status === 'failed' ? '❌' :
+                          ab.status === 'processing' ? '⚙️' : '⏳';
+        const nodeLabel = ab.current_node ? ` (${ab.current_node})` : '';
+        return `
+            <div class="wf-agent-card wf-agent-${statusClass}">
+                <div class="wf-agent-header">
+                    <span class="wf-agent-role">${escapeHtml(ab.role || '')}</span>
+                    <span class="wf-agent-name">${escapeHtml(ab.agent_name || '')}</span>
+                    <span class="wf-agent-status ${statusClass}">${statusIcon} ${escapeHtml(ab.status)}${nodeLabel}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function showWorkflowResult(data) {
+    document.getElementById('wfResultSection').classList.remove('hidden');
+
+    const agents = data.agents || [];
+    const config = data.workflow_config || {};
+
+    document.getElementById('wfResultDetails').innerHTML = `
+        <div class="wf-result-meta">
+            <div class="wf-result-meta-item">
+                <span class="wf-result-meta-label">Workflow</span>
+                <span class="wf-result-meta-value">${escapeHtml(data.name || data.workflow_id)}</span>
+            </div>
+            <div class="wf-result-meta-item">
+                <span class="wf-result-meta-label">Topology</span>
+                <span class="wf-topology-badge topo-${data.topology}">${escapeHtml(data.topology)}</span>
+            </div>
+            <div class="wf-result-meta-item">
+                <span class="wf-result-meta-label">Agents</span>
+                <span class="wf-result-meta-value">${agents.length}</span>
+            </div>
+        </div>
+        <div class="wf-result-agents">
+            ${agents.map((a, i) => `
+                <div class="wf-result-agent-card">
+                    <div class="wf-result-agent-header">
+                        <span class="wf-result-agent-idx">${i + 1}</span>
+                        <span class="wf-result-agent-name">${escapeHtml(a.agent_name || a.role)}</span>
+                        <span class="wf-result-agent-role">${escapeHtml(a.role)}</span>
+                    </div>
+                    <div class="wf-result-agent-task">${escapeHtml(a.sub_task || '')}</div>
+                    <div class="wf-result-agent-meta">
+                        ${(a.selected_mcps || []).length} MCPs · ${(a.selected_skills || []).length} skills
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+function chatWithWorkflow() {
+    if (currentWorkflowId) {
+        window.open(`/workflow-chat.html?workflow_id=${currentWorkflowId}`, '_blank');
+    } else {
+        showToast('No workflow to chat with', 'error');
+    }
 }

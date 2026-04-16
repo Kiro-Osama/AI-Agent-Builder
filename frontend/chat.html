@@ -247,7 +247,15 @@
             </div>
         </div>
         <div class="header-actions">
-            <div class="model-selector">
+            <div class="model-selector" style="margin-right:10px;">
+                <div class="model-label">Provider</div>
+                <select id="chatLlmProvider" onchange="syncChatProviderUi()" style="min-width:120px;padding:6px 10px;border-radius:8px;border:1px solid rgba(124,58,237,0.35);background:rgba(15,15,35,0.9);color:#e2e8f0;font-size:12px;">
+                    <option value="openrouter" selected>OpenRouter</option>
+                    <option value="ollama">Ollama (local)</option>
+                    <option value="ollama_remote">Ollama (remote)</option>
+                </select>
+            </div>
+            <div class="model-selector" id="chatModelSelectorWrap">
                 <div class="model-label">Model <span class="model-badge free" id="modelBadge">FREE</span></div>
                 <select id="modelSelect" onchange="onModelChange()">
                     <option value="" data-type="free">🤖 Agent Default</option>
@@ -357,6 +365,7 @@
                 if (configRequired.length > 0) {
                     showConfigModal(configRequired);
                 }
+                syncChatProviderUi();
             } catch (e) {
                 document.getElementById('welcomeTitle').textContent = '❌ Agent not found';
                 document.getElementById('welcomeDesc').textContent = e.message;
@@ -388,7 +397,11 @@
             document.getElementById('sendBtn').disabled = true;
 
             try {
-                const payload = { message, conversation_id: conversationId };
+                const payload = {
+                    message,
+                    conversation_id: conversationId,
+                    llm_provider: document.getElementById('chatLlmProvider').value,
+                };
                 if (selectedModel) payload.model = selectedModel;
                 if (!conversationId && Object.keys(mcpUserConfigs).length > 0) {
                     payload.mcp_configs = mcpUserConfigs;
@@ -554,9 +567,27 @@
             document.getElementById('configOverlay').classList.remove('open');
         }
 
+        function syncChatProviderUi() {
+            const prov = document.getElementById('chatLlmProvider');
+            const wrap = document.getElementById('chatModelSelectorWrap');
+            const ms = document.getElementById('modelSelect');
+            if (!prov || !ms || !wrap) return;
+            const ollama = prov.value === 'ollama' || prov.value === 'ollama_remote';
+            ms.disabled = ollama;
+            wrap.style.opacity = ollama ? '0.5' : '1';
+            if (ollama) {
+                selectedModel = null;
+                document.getElementById('agentModel').textContent =
+                    prov.value === 'ollama_remote' ? 'Ollama (remote)' : 'Ollama (local)';
+            } else if (agentConfig) {
+                onModelChange();
+            }
+        }
+
         function onModelChange() {
             const select = document.getElementById('modelSelect');
             const badge = document.getElementById('modelBadge');
+            if (select.disabled) return;
             const selected = select.options[select.selectedIndex];
             selectedModel = select.value || null;
             const type = selected.dataset.type || 'free';

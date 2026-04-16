@@ -15,6 +15,7 @@ Subsequent messages:
 import logging
 import os
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -30,8 +31,11 @@ from core.agent_session import (
 )
 from core.db import get_db
 from core.models import BuildHistory
+from core.ollama_client import use_llm_provider
 
 logger = logging.getLogger(__name__)
+
+LlmProvider = Literal["openrouter", "ollama", "ollama_remote"]
 router = APIRouter()
 
 # In-memory: composite key task_id:conversation_id -> message list
@@ -48,6 +52,7 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
     model: str | None = None
     mcp_configs: dict[str, dict] | None = None  # {mcp_name: {KEY: value}}
+    llm_provider: LlmProvider | None = None
 
 
 class ToolCallInfo(BaseModel):
@@ -146,13 +151,14 @@ async def chat_with_agent(
                 model = DEFAULT_MODEL
 
     try:
-        result = await run_agent_loop(
-            session=agent_session,
-            system_prompt=config["system_prompt"],
-            history=history,
-            user_message=request.message,
-            model=model,
-        )
+        with use_llm_provider(request.llm_provider):
+            result = await run_agent_loop(
+                session=agent_session,
+                system_prompt=config["system_prompt"],
+                history=history,
+                user_message=request.message,
+                model=model,
+            )
 
         response_text = result["response"]
 

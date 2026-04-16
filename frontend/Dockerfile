@@ -7,6 +7,7 @@ FROM nginx:alpine
 COPY index.html /usr/share/nginx/html/index.html
 COPY chat.html /usr/share/nginx/html/chat.html
 COPY admin.html /usr/share/nginx/html/admin.html
+COPY workflow-chat.html /usr/share/nginx/html/workflow-chat.html
 COPY styles.css /usr/share/nginx/html/styles.css
 COPY app.js /usr/share/nginx/html/app.js
 COPY admin.js /usr/share/nginx/html/admin.js

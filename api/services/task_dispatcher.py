@@ -31,6 +31,7 @@ async def dispatch_build_task(
     max_mcps: int,
     enable_skill_creation: bool,
     db: AsyncSession,
+    llm_provider: str | None = None,
 ) -> str:
     """
     Create a build_history record and dispatch the task to Celery.
@@ -54,6 +55,7 @@ async def dispatch_build_task(
                 "message": "Build request queued",
                 "data": {
                     "preferred_model": preferred_model,
+                    "llm_provider": llm_provider,
                     "max_mcps": max_mcps,
                     "enable_skill_creation": enable_skill_creation,
                 },
@@ -68,6 +70,7 @@ async def dispatch_build_task(
             kwargs={
                 "query": query,
                 "preferred_model": preferred_model,
+                "llm_provider": llm_provider,
                 "max_mcps": max_mcps,
                 "enable_skill_creation": enable_skill_creation,
             },

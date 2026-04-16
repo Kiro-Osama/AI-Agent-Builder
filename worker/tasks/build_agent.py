@@ -84,6 +84,7 @@ def run_build_pipeline(
     preferred_model: str | None = None,
     max_mcps: int = 5,
     enable_skill_creation: bool = True,
+    llm_provider: str | None = None,
 ):
     """
     Main pipeline task. Runs the LangGraph StateGraph.
@@ -91,10 +92,13 @@ def run_build_pipeline(
     Args:
         query: User's task description
         preferred_model: Preferred OpenRouter model
+        llm_provider: openrouter | ollama | ollama_remote (dashboard; scopes all LLM calls in this build)
         max_mcps: Maximum MCPs to select
         enable_skill_creation: Allow dynamic skill creation
     """
     import asyncio
+
+    from core.ollama_client import use_llm_provider
 
     task_id = self.request.id
     logger.info(f"🏗️ Starting build pipeline: {task_id}")
@@ -112,40 +116,41 @@ def run_build_pipeline(
     )
 
     try:
-        # Import and run the LangGraph pipeline
-        from orchestrator.graph import build_agent_graph
+        with use_llm_provider(llm_provider):
+            # Import and run the LangGraph pipeline
+            from orchestrator.graph import build_agent_graph
 
-        graph = build_agent_graph()
+            graph = build_agent_graph()
 
-        # Run async graph in sync context
-        initial_state = {
-            "user_query": query,
-            "preferred_model": preferred_model,
-            "max_mcps": max_mcps,
-            "enable_skill_creation": enable_skill_creation,
-            "sub_queries": [],
-            "retrieved_mcps": [],
-            "retrieved_skills": [],
-            "missing_capabilities": [],
-            "new_skills": [],
-            "validated_skills": [],
-            "selected_tools": {},
-            "running_mcps": [],
-            "final_template": {},
-            "status": "processing",
-            "errors": [],
-            "task_id": task_id,
-        }
+            # Run async graph in sync context
+            initial_state = {
+                "user_query": query,
+                "preferred_model": preferred_model,
+                "max_mcps": max_mcps,
+                "enable_skill_creation": enable_skill_creation,
+                "sub_queries": [],
+                "retrieved_mcps": [],
+                "retrieved_skills": [],
+                "missing_capabilities": [],
+                "new_skills": [],
+                "validated_skills": [],
+                "selected_tools": {},
+                "running_mcps": [],
+                "final_template": {},
+                "status": "processing",
+                "errors": [],
+                "task_id": task_id,
+            }
 
-        # Execute graph
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                _run_graph_async(graph, initial_state, task_id)
-            )
-        finally:
-            loop.close()
+            # Execute graph
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(
+                    _run_graph_async(graph, initial_state, task_id)
+                )
+            finally:
+                loop.close()
 
         # Update final result
         update_build_status(

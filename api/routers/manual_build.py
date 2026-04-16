@@ -6,6 +6,7 @@ POST /api/v1/build/manual - Create an agent directly without the LangGraph pipel
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -14,8 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db import get_db
 from core.models import BuildHistory, MCP, Skill
+from core.ollama_client import default_ollama_model_tag, default_remote_model_tag
 
 logger = logging.getLogger(__name__)
+
+LlmProvider = Literal["openrouter", "ollama", "ollama_remote"]
 router = APIRouter()
 
 
@@ -28,6 +32,7 @@ class ManualBuildRequest(BaseModel):
     selected_mcp_ids: list[int] = Field(default_factory=list)
     selected_skill_ids: list[str] = Field(default_factory=list)
     model: str = Field("google/gemma-3-27b-it:free")
+    llm_provider: LlmProvider | None = None
 
 
 @router.post("/build/manual")
@@ -80,13 +85,19 @@ async def manual_build(
                 skill_section += f"\n### {sk['skill_name']}\n{sk['system_prompt']}\n"
         system_prompt = system_prompt + skill_section
 
+    assigned_model = body.model
+    if body.llm_provider == "ollama":
+        assigned_model = f"ollama:{default_ollama_model_tag()}"
+    elif body.llm_provider == "ollama_remote":
+        assigned_model = f"ollama:{default_remote_model_tag()}"
+
     template = {
         "project_type": "single_agent",
         "agents": [
             {
                 "agent_name": body.agent_name,
                 "system_prompt": system_prompt,
-                "assigned_openrouter_model": body.model,
+                "assigned_openrouter_model": assigned_model,
                 "selected_mcps": selected_mcps,
                 "selected_skills": selected_skills,
             }

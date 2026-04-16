@@ -14,6 +14,14 @@ from typing import Any
 
 import httpx
 
+from core.ollama_client import (
+    default_ollama_model_tag,
+    default_remote_model_tag,
+    get_llm_provider_override,
+    ollama_chat_completion,
+    resolve_ollama_route,
+)
+
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------
@@ -28,12 +36,18 @@ DEFAULT_CHAT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "google/gemma-4-26b-a4b-it:
 _API_KEYS: list[str] = [k for k in [OPENROUTER_API_KEY, OPENROUTER_API_KEY_BACKUP] if k]
 
 # Ordered fallback chain: if the primary model fails (429/400), try the next one.
+# Cheap paid models at the end ensure we never fully stall when free daily limits hit.
 FREE_MODEL_CHAIN: list[str] = [
     "google/gemma-4-26b-a4b-it:free",
     "google/gemma-4-31b-it:free",
     "qwen/qwen3-next-80b-a3b-instruct:free",
     "meta-llama/llama-3.3-70b-instruct:free",
     "google/gemma-3-27b-it:free",
+]
+PAID_FALLBACK_CHAIN: list[str] = [
+    "google/gemini-2.0-flash-lite-001",
+    "google/gemma-3-4b-it",
+    "meta-llama/llama-3.2-3b-instruct",
 ]
 
 # -----------------------------------------------
@@ -61,10 +75,13 @@ class OpenRouterClient:
     def __init__(self):
         self.base_url = OPENROUTER_BASE_URL
         self.api_keys = [k for k in _API_KEYS if k.strip()] if _API_KEYS else []
-        if not self.api_keys:
+        if not self.api_keys and os.getenv("LLM_PROVIDER", "").strip().lower() not in (
+            "ollama",
+            "ollama_remote",
+        ):
             logger.warning(
-                "No OpenRouter API keys configured. Set OPENROUTER_API_KEY in .env. "
-                "LLM calls will fail."
+                "No OpenRouter API keys configured. Set OPENROUTER_API_KEY in .env "
+                "(or set LLM_PROVIDER=ollama / ollama_remote)."
             )
         self._current_key_idx = 0
 
@@ -91,12 +108,24 @@ class OpenRouterClient:
         2. Model fallback chain (on 429 per-model or 400 invalid model)
         3. Exponential backoff retry per model
         """
-        if not self.api_keys:
-            raise RuntimeError(
-                "No OpenRouter API keys configured. Set OPENROUTER_API_KEY in .env"
+        backend, route_model = resolve_ollama_route(model, DEFAULT_CHAT_MODEL)
+        if backend == "ollama":
+            return await ollama_chat_completion(
+                messages=messages,
+                model_tag=route_model,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
             )
 
-        primary_model = model or DEFAULT_CHAT_MODEL
+        if not self.api_keys:
+            raise RuntimeError(
+                "No OpenRouter API keys configured. Set OPENROUTER_API_KEY in .env "
+                "(or use Ollama: LLM_PROVIDER=ollama|ollama_remote or model id ollama:your-model)"
+            )
+
+        primary_model = route_model
 
         models_to_try = [primary_model]
         for m in FREE_MODEL_CHAIN:
@@ -104,6 +133,7 @@ class OpenRouterClient:
                 models_to_try.append(m)
 
         last_error: Exception | None = None
+        free_daily_exhausted = False
 
         for key_idx, api_key in enumerate(self.api_keys):
             headers = self._make_headers(api_key)
@@ -149,6 +179,7 @@ class OpenRouterClient:
                                 logger.warning(
                                     "Daily limit hit on %s key — switching keys", key_label,
                                 )
+                                free_daily_exhausted = True
                                 break
 
                             delay = min(RETRY_BASE_DELAY * (2 ** attempt), MAX_RETRY_DELAY)
@@ -159,8 +190,8 @@ class OpenRouterClient:
                             await asyncio.sleep(delay)
                             continue
 
-                        if status == 400:
-                            logger.warning("400 from %s — skipping to next model", model_id)
+                        if status in (400, 404):
+                            logger.warning("%d from %s — skipping to next model", status, model_id)
                             break
 
                         logger.error("OpenRouter API error: %s - %s", status, body)
@@ -170,15 +201,49 @@ class OpenRouterClient:
                         raise
 
                 else:
-                    # Retry loop finished without break → all retries used
                     logger.warning("Retries exhausted for %s/%s", key_label, model_id)
-                    continue  # try next model
+                    continue
 
-                # If we broke out of retry loop due to daily limit, break model loop too
                 if last_error and getattr(last_error, "response", None) is not None:
                     resp_text = last_error.response.text
                     if last_error.response.status_code == 429 and "free-models-per-day" in resp_text:
-                        break  # break model loop → next key
+                        break
+
+        # --- Paid fallback: if ALL free models hit daily limit, try cheap paid models ---
+        if free_daily_exhausted and PAID_FALLBACK_CHAIN:
+            logger.warning("Free daily limit exhausted on all keys — falling back to paid models")
+            for api_key in self.api_keys:
+                headers = self._make_headers(api_key)
+                for paid_model in PAID_FALLBACK_CHAIN:
+                    payload = {
+                        "model": paid_model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    }
+                    if tools:
+                        payload["tools"] = tools
+                    if response_format:
+                        payload["response_format"] = response_format
+                    try:
+                        async with httpx.AsyncClient(timeout=120.0) as client:
+                            response = await client.post(
+                                f"{self.base_url}/chat/completions",
+                                headers=headers,
+                                json=payload,
+                            )
+                            response.raise_for_status()
+                            data = response.json()
+                            if "choices" in data:
+                                logger.info("Paid fallback succeeded: %s", paid_model)
+                                return data
+                    except httpx.HTTPStatusError as e:
+                        last_error = e
+                        logger.warning("Paid fallback %s failed: %s", paid_model, e.response.status_code)
+                        continue
+                    except Exception as e:
+                        logger.warning("Paid fallback %s error: %s", paid_model, e)
+                        continue
 
         logger.error("All keys + models exhausted. Last error: %s", last_error)
         raise last_error or RuntimeError("All API keys and models exhausted")
@@ -271,8 +336,19 @@ class OpenRouterClient:
             task_complexity: One of 'simple', 'medium', 'complex', 'creative'
 
         Returns:
-            OpenRouter model ID
+            OpenRouter model ID, or `ollama:<tag>` when UI/env selects Ollama.
         """
+        ovr = get_llm_provider_override()
+        if ovr == "ollama":
+            return f"ollama:{default_ollama_model_tag()}"
+        if ovr == "ollama_remote":
+            return f"ollama:{default_remote_model_tag()}"
+        if ovr == "openrouter":
+            return MODEL_TIERS.get(task_complexity, DEFAULT_CHAT_MODEL)
+        if os.getenv("LLM_PROVIDER", "").strip().lower() == "ollama":
+            return f"ollama:{default_ollama_model_tag()}"
+        if os.getenv("LLM_PROVIDER", "").strip().lower() == "ollama_remote":
+            return f"ollama:{default_remote_model_tag()}"
         return MODEL_TIERS.get(task_complexity, DEFAULT_CHAT_MODEL)
 
     async def get_available_models(self) -> list[dict]:

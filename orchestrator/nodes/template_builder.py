@@ -95,6 +95,17 @@ async def template_builder(state: AgentBuilderState) -> dict:
             for agent in result.get("agents", []):
                 agent["assigned_openrouter_model"] = preferred_model
 
+        # ---- Skills: LLM often drops skills for "filesystem-only" tasks; restore from pipeline ----
+        pipeline_skill_ids = [s["skill_id"] for s in selected_skills if s.get("skill_id")]
+        for agent in result.get("agents", []):
+            llm_skills = agent.get("selected_skills") or []
+            if not llm_skills and pipeline_skill_ids:
+                agent["selected_skills"] = list(pipeline_skill_ids)
+                logger.info(
+                    "  LLM template had no skills — injecting %d from AI Final Filter",
+                    len(pipeline_skill_ids),
+                )
+
         # ---- CRITICAL: Inject full MCP metadata ----
         # The LLM template only has {name, running_port} for MCPs.
         # We need to inject docker_image, run_config, tools_provided
