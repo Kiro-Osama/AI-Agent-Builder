@@ -107,6 +107,16 @@
                                 <option value="10">10</option>
                             </select>
                         </div>
+                        <div class="option-group">
+                            <label>Max skills</label>
+                            <select id="maxSkills" title="How many catalog skills similarity search returns for filtering">
+                                <option value="3">3</option>
+                                <option value="5">5</option>
+                                <option value="8" selected>8</option>
+                                <option value="12">12</option>
+                                <option value="20">20</option>
+                            </select>
+                        </div>
                         <div class="option-group toggle-group">
                             <label>Skill Creation</label>
                             <label class="toggle">
@@ -218,7 +228,30 @@
                                 <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (Free)</option>
                             </select>
                         </div>
+                        <div class="option-group">
+                            <label>Sub-build max MCPs</label>
+                            <select id="wfSubBuildMaxMcps" title="Per-agent build inside this workflow">
+                                <option value="2">2</option>
+                                <option value="3" selected>3</option>
+                                <option value="5">5</option>
+                                <option value="10">10</option>
+                            </select>
+                        </div>
+                        <div class="option-group">
+                            <label>Sub-build max skills</label>
+                            <select id="wfSubBuildMaxSkills" title="Catalog skills retrieved per sub-agent build">
+                                <option value="3">3</option>
+                                <option value="5">5</option>
+                                <option value="8" selected>8</option>
+                                <option value="12">12</option>
+                                <option value="20">20</option>
+                            </select>
+                        </div>
                     </div>
+                    <label class="wf-checkbox-row">
+                        <input type="checkbox" id="wfAwaitPlanApproval" checked>
+                        <span>Review proposed plan before building agents (human in the loop)</span>
+                    </label>
                     <button class="btn-build" id="wfBuildBtn" onclick="submitWorkflowBuild()">
                         <span class="btn-icon">🔀</span>
                         <span>Build Workflow</span>
@@ -236,6 +269,17 @@
             <div class="wf-status-bar">
                 <span class="wf-status-label" id="wfStatusLabel">Queued</span>
                 <span class="wf-topology-badge" id="wfTopologyBadge"></span>
+            </div>
+            <div class="wf-plan-review hidden" id="wfPlanReviewPanel">
+                <h3 class="wf-plan-review-title">Proposed multi-agent plan</h3>
+                <p class="wf-plan-reasoning" id="wfPlanReasoning"></p>
+                <label class="wf-plan-revise-label" for="wfPlanReviseInput">Request changes (optional for revise)</label>
+                <textarea id="wfPlanReviseInput" rows="3" placeholder="e.g. Add a dedicated security review agent; use sequential instead of parallel…"></textarea>
+                <div class="wf-plan-actions">
+                    <button type="button" class="btn-primary" id="wfPlanApproveBtn" onclick="submitWfPlanDecision('approve')">Approve &amp; build agents</button>
+                    <button type="button" class="btn-secondary" id="wfPlanReviseBtn" onclick="submitWfPlanDecision('revise')">Re-plan with feedback</button>
+                    <button type="button" class="btn-secondary wf-plan-danger" id="wfPlanRejectBtn" onclick="submitWfPlanDecision('reject')">Cancel workflow</button>
+                </div>
             </div>
             <div class="wf-agents-progress" id="wfAgentsProgress"></div>
         </section>

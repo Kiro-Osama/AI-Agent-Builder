@@ -16,6 +16,7 @@ class AgentBuilderState(TypedDict):
     user_query: str                      # Original user request
     preferred_model: str | None          # User's preferred model
     max_mcps: int                        # Max MCPs to select
+    max_skills: int                      # Max skills to retrieve for filtering
     enable_skill_creation: bool          # Allow dynamic skill creation
     task_id: str                         # Celery task ID for status updates
 

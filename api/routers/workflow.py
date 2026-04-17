@@ -5,6 +5,7 @@ Build, manage, and chat with multi-agent workflows.
 
 Build endpoints:
   POST /workflow/build       — Submit a complex task for workflow planning + building
+  POST /workflow/{wf_id}/plan/decision — Approve / revise / reject plan (human-in-the-loop)
   GET  /workflow/{wf_id}     — Get workflow status and per-agent build progress
   GET  /workflows            — List all workflows
   POST /workflow/manual      — Manually define a workflow
@@ -20,7 +21,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, insert, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +55,18 @@ _celery = Celery("agent_builder", broker=settings.redis_url, backend=settings.re
 
 class WorkflowBuildRequest(BaseModel):
     query: str
+    topology_hint: str | None = "auto"
+    preferred_model: str | None = None
+    llm_provider: LlmProvider | None = None
+    # When True: planner runs, then status awaits POST .../plan/decision before sub-builds.
+    await_plan_approval: bool = False
+    sub_build_max_mcps: int = Field(3, ge=1, le=10, description="Max MCPs per sub-agent build")
+    sub_build_max_skills: int = Field(8, ge=1, le=20, description="Max skills retrieved per sub-agent build")
+
+
+class WorkflowPlanDecisionRequest(BaseModel):
+    action: Literal["approve", "reject", "revise"]
+    feedback: str | None = None
     topology_hint: str | None = "auto"
     preferred_model: str | None = None
     llm_provider: LlmProvider | None = None
@@ -109,6 +122,8 @@ async def build_workflow(
             user_query=request.query,
             status="queued",
             topology="sequential",
+            sub_build_max_mcps=request.sub_build_max_mcps,
+            sub_build_max_skills=request.sub_build_max_skills,
         )
     )
     await db.commit()
@@ -122,6 +137,7 @@ async def build_workflow(
                 "topology_hint": request.topology_hint,
                 "preferred_model": request.preferred_model,
                 "llm_provider": request.llm_provider,
+                "await_plan_approval": request.await_plan_approval,
             },
             queue="build",
         )
@@ -179,6 +195,76 @@ async def get_workflow_status(
         **wf.to_dict(),
         "agent_build_status": agent_build_status,
     }
+
+
+@router.post("/workflow/{workflow_id}/plan/decision")
+async def workflow_plan_decision(
+    workflow_id: str,
+    body: WorkflowPlanDecisionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Human-in-the-loop for multi-agent builds: after status is `awaiting_plan_approval`,
+    approve to start sub-agent builds, revise with feedback to re-plan, or reject.
+    """
+    result = await db.execute(
+        select(Workflow).where(Workflow.workflow_id == workflow_id)
+    )
+    wf = result.scalar_one_or_none()
+    if not wf:
+        raise HTTPException(404, "Workflow not found")
+
+    if wf.status != "awaiting_plan_approval":
+        raise HTTPException(
+            409,
+            f"Workflow is not waiting for plan approval (status={wf.status})",
+        )
+
+    if body.action == "reject":
+        await db.execute(
+            update(Workflow)
+            .where(Workflow.workflow_id == workflow_id)
+            .values(status="cancelled", error_log="Plan rejected by user")
+        )
+        await db.commit()
+        return {"workflow_id": workflow_id, "status": "cancelled"}
+
+    if body.action == "revise":
+        if not (body.feedback or "").strip():
+            raise HTTPException(400, "feedback is required for revise")
+        try:
+            _celery.send_task(
+                "worker.tasks.build_workflow.revise_workflow_plan",
+                kwargs={
+                    "workflow_id": workflow_id,
+                    "feedback": body.feedback.strip(),
+                    "topology_hint": body.topology_hint,
+                    "preferred_model": body.preferred_model,
+                    "llm_provider": body.llm_provider,
+                },
+                queue="build",
+            )
+        except Exception as e:
+            logger.error("Failed to dispatch workflow replan: %s", e)
+            raise HTTPException(500, f"Task queue unavailable: {e}") from e
+        return {"workflow_id": workflow_id, "status": "planning", "message": "Re-planning started"}
+
+    # approve
+    try:
+        _celery.send_task(
+            "worker.tasks.build_workflow.continue_workflow_build",
+            kwargs={
+                "workflow_id": workflow_id,
+                "preferred_model": body.preferred_model,
+                "llm_provider": body.llm_provider,
+            },
+            queue="build",
+        )
+    except Exception as e:
+        logger.error("Failed to dispatch workflow continue: %s", e)
+        raise HTTPException(500, f"Task queue unavailable: {e}") from e
+
+    return {"workflow_id": workflow_id, "status": "building", "message": "Sub-agent builds started"}
 
 
 @router.get("/workflows")

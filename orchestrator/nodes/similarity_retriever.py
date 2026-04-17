@@ -33,10 +33,11 @@ def _get_session() -> Session:
 async def similarity_retriever(state: AgentBuilderState) -> dict:
     """
     Node 2: Search MCPs and Skills by similarity.
-    Returns top 10 MCPs and top 5 Skills.
+    Returns top-N MCPs and top-M skills (from state max_mcps / max_skills).
     """
     sub_queries = state["sub_queries"]
     max_mcps = state.get("max_mcps", 10)
+    max_skills = state.get("max_skills", 8)
     logger.info(f"🔎 Node 2: Searching with {len(sub_queries)} queries...")
 
     retrieved_mcps = []
@@ -148,9 +149,9 @@ async def similarity_retriever(state: AgentBuilderState) -> dict:
                         FROM skills
                         WHERE status = 'active' AND embedding IS NOT NULL
                         ORDER BY embedding <=> CAST(:query_vec AS vector)
-                        LIMIT 8
+                        LIMIT :skill_limit
                     """),
-                    {"query_vec": str(skill_embedding)},
+                    {"query_vec": str(skill_embedding), "skill_limit": max_skills},
                 ).fetchall()
 
                 for row in skill_results:
@@ -177,9 +178,9 @@ async def similarity_retriever(state: AgentBuilderState) -> dict:
                             WHERE status = 'active' AND (
                                 description ILIKE :pattern OR skill_id ILIKE :pattern
                             )
-                            LIMIT 5
+                            LIMIT :skill_limit
                         """),
-                        {"pattern": f"%{sq}%"},
+                        {"pattern": f"%{sq}%", "skill_limit": max_skills},
                     ).fetchall()
 
                     for row in skill_results:

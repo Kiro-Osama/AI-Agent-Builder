@@ -158,6 +158,8 @@ class Workflow(Base):
     status = Column(String(50), default="planning")
     build_task_ids = Column(JSONB, server_default=text("'[]'::jsonb"))
     error_log = Column(Text)
+    sub_build_max_mcps = Column(Integer, nullable=True)
+    sub_build_max_skills = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -175,6 +177,8 @@ class Workflow(Base):
             "status": self.status,
             "build_task_ids": self.build_task_ids,
             "error_log": self.error_log,
+            "sub_build_max_mcps": self.sub_build_max_mcps,
+            "sub_build_max_skills": self.sub_build_max_skills,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

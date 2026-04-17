@@ -6,6 +6,7 @@ from api.schemas import BuildRequest, BuildResponse, StatusResponse, AgentTempla
 def test_build_request_valid():
     req = BuildRequest(query="Build a file organizer agent")
     assert req.max_mcps == 5
+    assert req.max_skills == 8
     assert req.enable_skill_creation is True
 
 

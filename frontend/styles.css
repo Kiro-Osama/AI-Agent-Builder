@@ -1307,6 +1307,68 @@ select:focus {
 .wf-agent-status.failed { color: #ef4444; }
 .wf-agent-status.pending { color: var(--text-muted); }
 
+.wf-checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 12px 0 8px;
+    font-size: 0.86rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.wf-checkbox-row input { margin-top: 3px; flex-shrink: 0; }
+
+.wf-plan-review {
+    margin: 16px 0 20px;
+    padding: 18px 20px;
+    border-radius: var(--radius-sm);
+    background: rgba(99, 102, 241, 0.06);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+}
+.wf-plan-review-title {
+    margin: 0 0 10px;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.wf-plan-reasoning {
+    margin: 0 0 14px;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+}
+.wf-plan-revise-label {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+.wf-plan-review textarea {
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.86rem;
+    resize: vertical;
+}
+.wf-plan-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.wf-plan-danger { color: #fca5a5 !important; border-color: rgba(239, 68, 68, 0.35) !important; }
+
+.wf-status-awaiting_plan_approval { color: #a5b4fc; }
+
 /* Workflow Result */
 .wf-result-meta {
     display: flex;

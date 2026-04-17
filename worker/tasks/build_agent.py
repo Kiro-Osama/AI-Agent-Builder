@@ -83,6 +83,7 @@ def run_build_pipeline(
     query: str,
     preferred_model: str | None = None,
     max_mcps: int = 5,
+    max_skills: int = 8,
     enable_skill_creation: bool = True,
     llm_provider: str | None = None,
 ):
@@ -94,6 +95,7 @@ def run_build_pipeline(
         preferred_model: Preferred OpenRouter model
         llm_provider: openrouter | ollama | ollama_remote (dashboard; scopes all LLM calls in this build)
         max_mcps: Maximum MCPs to select
+        max_skills: Maximum catalog skills to retrieve for similarity / filter
         enable_skill_creation: Allow dynamic skill creation
     """
     import asyncio
@@ -127,6 +129,7 @@ def run_build_pipeline(
                 "user_query": query,
                 "preferred_model": preferred_model,
                 "max_mcps": max_mcps,
+                "max_skills": max_skills,
                 "enable_skill_creation": enable_skill_creation,
                 "sub_queries": [],
                 "retrieved_mcps": [],

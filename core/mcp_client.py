@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 # Timeout for MCP operations
 MCP_TIMEOUT = int(os.getenv("MCP_TIMEOUT", "30"))
 
+# asyncio.StreamReader default readline limit is 64 KiB; large tools/list payloads
+# (e.g. mcp-notion) exceed it and raise LimitOverrunError.
+MCP_SUBPROCESS_STREAM_LIMIT = int(os.getenv("MCP_SUBPROCESS_STREAM_LIMIT", str(16 * 1024 * 1024)))
+
 
 def _mask_docker_cmd_for_log(cmd: list[str]) -> str:
     """Redact values after -e KEY=value so secrets are not logged."""
@@ -122,6 +126,7 @@ class MCPContainerSession:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=MCP_SUBPROCESS_STREAM_LIMIT,
             )
             self._started = True
             # Give the container a moment to start

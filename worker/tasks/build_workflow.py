@@ -3,12 +3,12 @@ Build Workflow Task
 ====================
 Celery task that:
 1. Runs the Workflow Planner to decompose the user query.
-2. Dispatches individual agent builds via the existing single-agent pipeline.
-3. Polls for completion of each sub-build.
-4. Assembles the final workflow template and stores it.
+2. Optionally pauses for human approval of the plan (`await_plan_approval`).
+3. Dispatches individual agent builds via the existing single-agent pipeline.
+4. Polls for completion of each sub-build.
+5. Assembles the final workflow template and stores it.
 """
 import asyncio
-import json
 import logging
 import os
 import time
@@ -16,12 +16,14 @@ import uuid
 from datetime import datetime, timezone
 
 from worker.celery_app import app
-from sqlalchemy import create_engine, update, insert, select, text
+from sqlalchemy import create_engine, update, insert, select
 from sqlalchemy.orm import Session
 
 from core.models import Workflow, BuildHistory
 from core.workflow_topologies import (
+    AgentRole,
     TopologyType,
+    WorkflowPlan,
     get_supervisor_system_prompt,
 )
 
@@ -56,10 +58,67 @@ def _update_workflow(workflow_id: str, **values):
         sess.close()
 
 
+def _load_workflow(workflow_id: str) -> Workflow | None:
+    sess = _get_session()
+    try:
+        return sess.execute(
+            select(Workflow).where(Workflow.workflow_id == workflow_id)
+        ).scalar_one_or_none()
+    finally:
+        sess.close()
+
+
+def workflow_row_to_plan(wf: Workflow) -> WorkflowPlan:
+    """Rebuild WorkflowPlan from persisted workflow row (after planner / approval gate)."""
+    try:
+        topology = TopologyType(wf.topology)
+    except ValueError:
+        topology = TopologyType.SEQUENTIAL
+
+    agent_roles: list[AgentRole] = []
+    for a in wf.agents or []:
+        if not isinstance(a, dict):
+            continue
+        agent_roles.append(
+            AgentRole(
+                role=a.get("role", "agent"),
+                agent_name=a.get("agent_name", "Agent"),
+                sub_task=a.get("sub_task", ""),
+                task_id=a.get("task_id"),
+                needs_mcps=list(a.get("needs_mcps") or []),
+                needs_skills=list(a.get("needs_skills") or []),
+                depends_on=list(a.get("depends_on") or []),
+                accepts_from=list(a.get("accepts_from") or []),
+                reports_to=list(a.get("reports_to") or []),
+                reads_from_shared_state=list(a.get("reads_from_shared_state") or []),
+                output_to_shared_state=list(a.get("output_to_shared_state") or []),
+            )
+        )
+
+    rc = wf.workflow_config if isinstance(wf.workflow_config, dict) else {}
+    sup_cfg = None
+    if topology == TopologyType.SUPERVISOR:
+        sup = rc.get("supervisor")
+        if sup:
+            sup_cfg = {"supervisor_role": sup}
+
+    return WorkflowPlan(
+        workflow_name=wf.name or "Workflow",
+        topology=topology,
+        agents=agent_roles,
+        supervisor_config=sup_cfg,
+        termination_condition="all_agents_complete",
+        shared_state_schema=dict(wf.shared_state_schema or {}),
+        routing_rules=dict(rc),
+        reasoning=wf.description or "",
+    )
+
+
 def _dispatch_single_agent_build(
     query: str,
     preferred_model: str | None = None,
     max_mcps: int = 5,
+    max_skills: int = 8,
     enable_skill_creation: bool = True,
     llm_provider: str | None = None,
 ) -> str:
@@ -91,6 +150,7 @@ def _dispatch_single_agent_build(
             "query": query,
             "preferred_model": preferred_model,
             "max_mcps": max_mcps,
+            "max_skills": max_skills,
             "enable_skill_creation": enable_skill_creation,
             "llm_provider": llm_provider,
         },
@@ -139,59 +199,20 @@ def _poll_build_completion(task_ids: list[str]) -> dict[str, dict]:
     return results
 
 
-@app.task(bind=True, name="worker.tasks.build_workflow.run_workflow_build")
-def run_workflow_build(
-    self,
-    user_query: str,
+def _execute_dispatch_poll_assemble(
     workflow_id: str,
-    topology_hint: str | None = None,
-    preferred_model: str | None = None,
-    llm_provider: str | None = None,
-):
-    """
-    Main workflow build task.
+    plan: WorkflowPlan,
+    preferred_model: str | None,
+    llm_provider: str | None,
+) -> dict:
+    """Sub-builds, poll, assemble template (after plan is approved or auto-run)."""
+    wf_opts = _load_workflow(workflow_id)
+    sub_mcps = (wf_opts.sub_build_max_mcps if wf_opts else None) or 3
+    sub_skills = (wf_opts.sub_build_max_skills if wf_opts else None) or 8
 
-    1. Call the LLM planner to decompose the task.
-    2. Dispatch sub-agent builds.
-    3. Collect results, assemble workflow template.
-    """
-    logger.info("[BuildWorkflow] Starting workflow build: %s", workflow_id)
+    for a in plan.agents:
+        a.task_id = None
 
-    _update_workflow(workflow_id, status="planning")
-
-    # --- Step 1: Plan the workflow ---
-    from core.ollama_client import use_llm_provider
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        from orchestrator.workflow_planner import plan_workflow
-
-        with use_llm_provider(llm_provider):
-            plan = loop.run_until_complete(plan_workflow(user_query, topology_hint))
-    except Exception as e:
-        logger.error("[BuildWorkflow] Planning failed: %s", e)
-        _update_workflow(
-            workflow_id,
-            status="failed",
-            error_log=f"Planning failed: {e}",
-        )
-        raise
-    finally:
-        loop.close()
-
-    _update_workflow(
-        workflow_id,
-        status="building",
-        name=plan.workflow_name,
-        description=plan.reasoning,
-        topology=plan.topology.value,
-        agents=plan.to_dict()["agents"],
-        workflow_config=plan.routing_rules,
-        shared_state_schema=plan.shared_state_schema,
-    )
-
-    # --- Step 2: Dispatch individual agent builds ---
     task_id_to_role: dict[str, str] = {}
     build_task_ids: list[str] = []
 
@@ -209,7 +230,8 @@ def run_workflow_build(
         tid = _dispatch_single_agent_build(
             query=build_query,
             preferred_model=preferred_model,
-            max_mcps=3,
+            max_mcps=sub_mcps,
+            max_skills=sub_skills,
             enable_skill_creation=True,
             llm_provider=llm_provider,
         )
@@ -219,14 +241,12 @@ def run_workflow_build(
 
     _update_workflow(workflow_id, build_task_ids=build_task_ids)
 
-    # --- Step 3: Poll for all builds to complete ---
     logger.info(
         "[BuildWorkflow] Waiting for %d sub-builds to complete...",
         len(build_task_ids),
     )
     build_results = _poll_build_completion(build_task_ids)
 
-    # --- Step 4: Assemble workflow template ---
     failed_agents: list[str] = []
     assembled_agents: list[dict] = []
 
@@ -257,10 +277,11 @@ def run_workflow_build(
             "output_to_shared_state": agent_role.output_to_shared_state,
         }
 
-        # For supervisor topology: inject supervisor system prompt
         if (
             plan.topology == TopologyType.SUPERVISOR
-            and agent_role.role == (plan.supervisor_config or {}).get("supervisor_role", plan.agents[0].role)
+            and agent_role.role == (plan.supervisor_config or {}).get(
+                "supervisor_role", plan.agents[0].role
+            )
         ):
             workers = [a for a in plan.agents if a.role != agent_role.role]
             agent_entry["system_prompt"] = get_supervisor_system_prompt(
@@ -275,7 +296,6 @@ def run_workflow_build(
         error_summary = "; ".join(failed_agents)
         logger.warning("[BuildWorkflow] Some agents failed: %s", error_summary)
 
-    # Build the final workflow config
     supervisor_entry = None
     if plan.topology == TopologyType.SUPERVISOR:
         sup_role = (plan.supervisor_config or {}).get("supervisor_role", plan.agents[0].role)
@@ -311,3 +331,161 @@ def run_workflow_build(
     )
 
     return workflow_template
+
+
+@app.task(bind=True, name="worker.tasks.build_workflow.run_workflow_build")
+def run_workflow_build(
+    self,
+    user_query: str,
+    workflow_id: str,
+    topology_hint: str | None = None,
+    preferred_model: str | None = None,
+    llm_provider: str | None = None,
+    await_plan_approval: bool = False,
+):
+    """
+    Main workflow build task.
+
+    1. Call the LLM planner to decompose the user query.
+    2. If await_plan_approval: persist plan and stop at status awaiting_plan_approval.
+    3. Else: dispatch sub-agent builds, poll, assemble.
+    """
+    logger.info("[BuildWorkflow] Starting workflow build: %s", workflow_id)
+
+    _update_workflow(workflow_id, status="planning")
+
+    from core.ollama_client import use_llm_provider
+    from orchestrator.workflow_planner import plan_workflow
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        with use_llm_provider(llm_provider):
+            plan = loop.run_until_complete(plan_workflow(user_query, topology_hint))
+    except Exception as e:
+        logger.error("[BuildWorkflow] Planning failed: %s", e)
+        _update_workflow(
+            workflow_id,
+            status="failed",
+            error_log=f"Planning failed: {e}",
+        )
+        raise
+    finally:
+        loop.close()
+
+    plan_payload = {
+        "name": plan.workflow_name,
+        "description": plan.reasoning,
+        "topology": plan.topology.value,
+        "agents": plan.to_dict()["agents"],
+        "workflow_config": plan.routing_rules,
+        "shared_state_schema": plan.shared_state_schema,
+    }
+
+    if await_plan_approval:
+        _update_workflow(
+            workflow_id,
+            status="awaiting_plan_approval",
+            **plan_payload,
+        )
+        logger.info(
+            "[BuildWorkflow] Paused for human plan approval workflow_id=%s",
+            workflow_id,
+        )
+        return {"phase": "awaiting_plan_approval", "workflow_id": workflow_id}
+
+    _update_workflow(workflow_id, status="building", **plan_payload)
+    return _execute_dispatch_poll_assemble(
+        workflow_id, plan, preferred_model, llm_provider
+    )
+
+
+@app.task(bind=True, name="worker.tasks.build_workflow.continue_workflow_build")
+def continue_workflow_build(
+    self,
+    workflow_id: str,
+    preferred_model: str | None = None,
+    llm_provider: str | None = None,
+):
+    """Resume after user approved the proposed plan."""
+    wf = _load_workflow(workflow_id)
+    if not wf:
+        logger.error("[BuildWorkflow] continue: missing workflow %s", workflow_id)
+        return
+    if wf.status != "awaiting_plan_approval":
+        logger.warning(
+            "[BuildWorkflow] continue: expected awaiting_plan_approval, got %s",
+            wf.status,
+        )
+        return
+
+    plan = workflow_row_to_plan(wf)
+    _update_workflow(workflow_id, status="building", build_task_ids=[])
+    return _execute_dispatch_poll_assemble(
+        workflow_id, plan, preferred_model, llm_provider
+    )
+
+
+@app.task(bind=True, name="worker.tasks.build_workflow.revise_workflow_plan")
+def revise_workflow_plan(
+    self,
+    workflow_id: str,
+    feedback: str,
+    topology_hint: str | None = None,
+    preferred_model: str | None = None,
+    llm_provider: str | None = None,
+):
+    """Re-plan from user feedback while workflow is at the human gate."""
+    wf = _load_workflow(workflow_id)
+    if not wf:
+        logger.error("[BuildWorkflow] revise: missing workflow %s", workflow_id)
+        return
+    if wf.status != "awaiting_plan_approval":
+        logger.warning(
+            "[BuildWorkflow] revise: expected awaiting_plan_approval, got %s",
+            wf.status,
+        )
+        return
+
+    augmented = (
+        f"{wf.user_query}\n\n---\n"
+        f"User feedback on the proposed multi-agent plan (revise the plan accordingly):\n{feedback.strip()}"
+    )
+
+    _update_workflow(workflow_id, status="planning")
+
+    from core.ollama_client import use_llm_provider
+    from orchestrator.workflow_planner import plan_workflow
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        with use_llm_provider(llm_provider):
+            plan = loop.run_until_complete(
+                plan_workflow(augmented, topology_hint or "auto")
+            )
+    except Exception as e:
+        logger.error("[BuildWorkflow] Re-planning failed: %s", e)
+        _update_workflow(
+            workflow_id,
+            status="failed",
+            error_log=f"Re-planning failed: {e}",
+        )
+        raise
+    finally:
+        loop.close()
+
+    _update_workflow(
+        workflow_id,
+        status="awaiting_plan_approval",
+        name=plan.workflow_name,
+        description=plan.reasoning,
+        topology=plan.topology.value,
+        agents=plan.to_dict()["agents"],
+        workflow_config=plan.routing_rules,
+        shared_state_schema=plan.shared_state_schema,
+        build_task_ids=[],
+        error_log=None,
+    )
+    logger.info("[BuildWorkflow] Revised plan ready for approval workflow_id=%s", workflow_id)
+    return {"phase": "awaiting_plan_approval", "workflow_id": workflow_id}

@@ -127,7 +127,8 @@ async function submitBuild() {
         query: query,
         llm_provider: llmProv,
         preferred_model: useOllama ? null : (document.getElementById('modelSelect').value || null),
-        max_mcps: parseInt(document.getElementById('maxMcps').value),
+        max_mcps: parseInt(document.getElementById('maxMcps').value, 10),
+        max_skills: parseInt(document.getElementById('maxSkills').value, 10),
         enable_skill_creation: document.getElementById('enableSkills').checked,
     };
 
@@ -813,11 +814,17 @@ async function submitWorkflowBuild() {
     const wfProvEl = document.getElementById('wfLlmProvider');
     const wfLlmProv = wfProvEl ? wfProvEl.value : 'openrouter';
     const wfOllama = wfLlmProv === 'ollama' || wfLlmProv === 'ollama_remote';
+    const awaitChk = document.getElementById('wfAwaitPlanApproval');
+    const wfMcpsEl = document.getElementById('wfSubBuildMaxMcps');
+    const wfSkillsEl = document.getElementById('wfSubBuildMaxSkills');
     const payload = {
         query: query,
         topology_hint: document.getElementById('wfTopology').value || 'auto',
         llm_provider: wfLlmProv,
         preferred_model: wfOllama ? null : (document.getElementById('wfModel').value || null),
+        await_plan_approval: !!(awaitChk && awaitChk.checked),
+        sub_build_max_mcps: wfMcpsEl ? parseInt(wfMcpsEl.value, 10) : 3,
+        sub_build_max_skills: wfSkillsEl ? parseInt(wfSkillsEl.value, 10) : 8,
     };
 
     try {
@@ -854,6 +861,10 @@ function showWorkflowPipeline(wfId) {
     document.getElementById('wfAgentsProgress').innerHTML = '<div class="loading-placeholder">Planning workflow...</div>';
     document.getElementById('wfStatusLabel').textContent = 'Queued';
     document.getElementById('wfTopologyBadge').textContent = '';
+    const planPanel = document.getElementById('wfPlanReviewPanel');
+    if (planPanel) planPanel.classList.add('hidden');
+    const revIn = document.getElementById('wfPlanReviseInput');
+    if (revIn) revIn.value = '';
 }
 
 function startWorkflowPolling(wfId) {
@@ -869,12 +880,18 @@ async function pollWorkflowStatus(wfId) {
         const data = await res.json();
         updateWorkflowPipelineUI(data);
 
-        if (data.status === 'ready' || data.status === 'failed') {
+        if (
+            data.status === 'ready' ||
+            data.status === 'failed' ||
+            data.status === 'cancelled'
+        ) {
             clearInterval(wfPollInterval);
             wfPollInterval = null;
 
             if (data.status === 'ready') {
                 showWorkflowResult(data);
+            } else if (data.status === 'cancelled') {
+                showToast('Workflow cancelled.', 'error');
             } else {
                 showToast(`Workflow build failed: ${data.error_log || 'Unknown error'}`, 'error');
             }
@@ -884,17 +901,78 @@ async function pollWorkflowStatus(wfId) {
     }
 }
 
+async function submitWfPlanDecision(action) {
+    if (!currentWorkflowId) {
+        showToast('No workflow in progress', 'error');
+        return;
+    }
+    const wfId = currentWorkflowId;
+    const feedbackEl = document.getElementById('wfPlanReviseInput');
+    const feedback = feedbackEl ? feedbackEl.value.trim() : '';
+
+    if (action === 'revise' && !feedback) {
+        showToast('Describe what to change before requesting a revised plan', 'error');
+        return;
+    }
+
+    const wfProvEl = document.getElementById('wfLlmProvider');
+    const wfLlmProv = wfProvEl ? wfProvEl.value : 'openrouter';
+    const wfOllama = wfLlmProv === 'ollama' || wfLlmProv === 'ollama_remote';
+    const payload = {
+        action,
+        feedback: action === 'revise' ? feedback : null,
+        topology_hint: document.getElementById('wfTopology').value || 'auto',
+        llm_provider: wfLlmProv,
+        preferred_model: wfOllama ? null : (document.getElementById('wfModel').value || null),
+    };
+
+    const btns = ['wfPlanApproveBtn', 'wfPlanReviseBtn', 'wfPlanRejectBtn']
+        .map((id) => document.getElementById(id))
+        .filter(Boolean);
+    btns.forEach((b) => { b.disabled = true; });
+
+    try {
+        const res = await fetch(`${API_BASE}/workflow/${wfId}/plan/decision`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Plan decision failed');
+        }
+        await res.json();
+        if (action === 'approve') {
+            showToast('Building agents…', 'success');
+        } else if (action === 'revise') {
+            showToast('Re-planning with your feedback…', 'success');
+            if (feedbackEl) feedbackEl.value = '';
+        } else {
+            showToast('Workflow cancelled', 'success');
+        }
+        if (!wfPollInterval) startWorkflowPolling(wfId);
+    } catch (e) {
+        showToast(`Error: ${e.message}`, 'error');
+    } finally {
+        btns.forEach((b) => { b.disabled = false; });
+    }
+}
+
 function updateWorkflowPipelineUI(data) {
     const statusLabel = document.getElementById('wfStatusLabel');
     const topoBadge = document.getElementById('wfTopologyBadge');
     const agentsDiv = document.getElementById('wfAgentsProgress');
+    const planPanel = document.getElementById('wfPlanReviewPanel');
+    const planReasoning = document.getElementById('wfPlanReasoning');
 
     const statusMap = {
         queued: 'Queued',
         planning: 'Planning...',
+        awaiting_plan_approval: 'Awaiting your approval',
         building: 'Building Agents...',
         ready: 'Ready',
         failed: 'Failed',
+        cancelled: 'Cancelled',
     };
 
     statusLabel.textContent = statusMap[data.status] || data.status;
@@ -905,6 +983,17 @@ function updateWorkflowPipelineUI(data) {
         topoBadge.className = `wf-topology-badge topo-${data.topology}`;
     }
 
+    if (planPanel) {
+        if (data.status === 'awaiting_plan_approval') {
+            planPanel.classList.remove('hidden');
+            if (planReasoning) {
+                planReasoning.textContent = data.description || '(No planner summary)';
+            }
+        } else {
+            planPanel.classList.add('hidden');
+        }
+    }
+
     const agentBuilds = data.agent_build_status || [];
     if (agentBuilds.length === 0 && data.status === 'planning') {
         agentsDiv.innerHTML = '<div class="loading-placeholder">AI is decomposing the task into agents...</div>';
@@ -912,14 +1001,17 @@ function updateWorkflowPipelineUI(data) {
     }
 
     if (agentBuilds.length === 0 && data.agents && data.agents.length) {
-        agentsDiv.innerHTML = data.agents.map(a => `
+        const hint = data.status === 'awaiting_plan_approval'
+            ? '<div class="loading-placeholder" style="margin-bottom:10px">Proposed roles below — approve or request changes above.</div>'
+            : '';
+        agentsDiv.innerHTML = hint + data.agents.map(a => `
             <div class="wf-agent-card">
                 <div class="wf-agent-header">
                     <span class="wf-agent-role">${escapeHtml(a.role || '')}</span>
                     <span class="wf-agent-name">${escapeHtml(a.agent_name || '')}</span>
                 </div>
                 <div class="wf-agent-task">${escapeHtml(a.sub_task || '')}</div>
-                <span class="wf-agent-status pending">Pending</span>
+                <span class="wf-agent-status pending">${data.status === 'awaiting_plan_approval' ? 'Planned' : 'Pending'}</span>
             </div>
         `).join('');
         return;

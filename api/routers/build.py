@@ -33,6 +33,7 @@ async def build_agent(
             preferred_model=request.preferred_model,
             llm_provider=request.llm_provider,
             max_mcps=request.max_mcps,
+            max_skills=request.max_skills,
             enable_skill_creation=request.enable_skill_creation,
             db=db,
         )

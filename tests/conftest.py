@@ -17,6 +17,7 @@ def sample_build_request():
         "query": "Build a GitHub PR monitor that sends Slack notifications",
         "preferred_model": None,
         "max_mcps": 5,
+        "max_skills": 8,
         "enable_skill_creation": True,
     }
 
