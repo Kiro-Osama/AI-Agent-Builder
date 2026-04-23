@@ -11,6 +11,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
+from core.langsmith_env import apply_langsmith_env
+
+apply_langsmith_env(
+    langsmith_api_key=settings.langsmith_api_key or None,
+    langchain_project=settings.langchain_project or None,
+    langchain_endpoint=settings.langchain_endpoint or None,
+)
+
 from api.routers import build, status, templates, chat, embeddings, skills_seed, admin, manual_build, workflow
 
 # -----------------------------------------------

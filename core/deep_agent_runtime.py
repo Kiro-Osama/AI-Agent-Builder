@@ -20,14 +20,33 @@ import logging
 import os
 from typing import Any
 
-import nest_asyncio
-
-nest_asyncio.apply()
-
-from deepagents import create_deep_agent
-from deepagents.backends import FilesystemBackend
-
 logger = logging.getLogger(__name__)
+
+
+def _ensure_nest_asyncio():
+    """Apply nest_asyncio only when needed and only if the loop supports it."""
+    try:
+        import nest_asyncio
+        nest_asyncio.apply()
+    except (ValueError, RuntimeError):
+        # uvloop (used by uvicorn) doesn't support patching — skip silently
+        pass
+
+
+# Lazy imports — deepagents is only installed in the agent-engine container
+_create_deep_agent = None
+_FilesystemBackend = None
+
+
+def _lazy_imports():
+    """Import deepagents lazily so the API container doesn't crash on import."""
+    global _create_deep_agent, _FilesystemBackend
+    if _create_deep_agent is None:
+        _ensure_nest_asyncio()
+        from deepagents import create_deep_agent
+        from deepagents.backends import FilesystemBackend
+        _create_deep_agent = create_deep_agent
+        _FilesystemBackend = FilesystemBackend
 
 # -----------------------------------------------
 # Environment Configuration
@@ -201,6 +220,8 @@ async def run_deep_agent(
             "iterations": int,         # Number of iterations
         }
     """
+    _lazy_imports()
+
     effective_model = model or DEEPAGENT_MODEL
     effective_workspace = workspace_dir or WORKSPACE_DIR
 
@@ -222,7 +243,7 @@ async def run_deep_agent(
     # 3. Create the DeepAgent (following user's reference architecture exactly)
     agent_kwargs: dict[str, Any] = {
         "model": llm,
-        "backend": FilesystemBackend(
+        "backend": _FilesystemBackend(
             root_dir=effective_workspace,
             virtual_mode=True,
         ),
@@ -235,7 +256,7 @@ async def run_deep_agent(
     if mcp_tools:
         agent_kwargs["tools"] = mcp_tools
 
-    agent = create_deep_agent(**agent_kwargs)
+    agent = _create_deep_agent(**agent_kwargs)
 
     # 4. Build messages from conversation history
     messages = []
@@ -302,6 +323,8 @@ async def stream_deep_agent(
     Streaming variant of run_deep_agent. Yields chunks as the agent thinks.
     Useful for real-time UI updates showing agent's thought process.
     """
+    _lazy_imports()
+
     effective_model = model or DEEPAGENT_MODEL
     effective_workspace = workspace_dir or WORKSPACE_DIR
 
@@ -310,7 +333,7 @@ async def stream_deep_agent(
 
     agent_kwargs: dict[str, Any] = {
         "model": llm,
-        "backend": FilesystemBackend(
+        "backend": _FilesystemBackend(
             root_dir=effective_workspace,
             virtual_mode=True,
         ),
@@ -321,7 +344,7 @@ async def stream_deep_agent(
     if mcp_tools:
         agent_kwargs["tools"] = mcp_tools
 
-    agent = create_deep_agent(**agent_kwargs)
+    agent = _create_deep_agent(**agent_kwargs)
 
     messages = []
     for msg in history:

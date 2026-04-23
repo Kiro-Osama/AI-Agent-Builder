@@ -1,0 +1,15 @@
+# Agent Engine — runtime dependencies
+# These are on top of requirements/base.txt
+
+# DeepAgents ecosystem (already in base.txt, but pinned here for the dedicated image)
+deepagents>=0.1.0
+langchain>=0.3.0
+langchain-google-genai>=4.2.0
+langchain-openai>=0.3.0
+langchain-mcp-adapters>=0.1.0
+mcp>=1.0.0
+nest-asyncio>=1.6.0
+
+# API framework for the agent engine internal server
+fastapi>=0.115.0
+uvicorn>=0.34.0

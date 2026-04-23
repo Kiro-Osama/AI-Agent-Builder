@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     # Skills
     skills_dir: str = "/app/skills"
 
+    # LangSmith (optional — LangGraph / LangChain tracing when API key is set)
+    langsmith_api_key: str = ""
+    langchain_project: str = "agent_builder"
+    langchain_endpoint: str = "https://api.smith.langchain.com"
+
     @field_validator("database_url", "alembic_database_url", "redis_url", mode="before")
     @classmethod
     def strip_empty_to_default(cls, v: str) -> str:

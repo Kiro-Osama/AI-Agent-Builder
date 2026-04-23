@@ -10,6 +10,10 @@ from celery import Celery
 
 load_dotenv()
 
+from core.langsmith_env import apply_langsmith_env
+
+apply_langsmith_env()
+
 # -----------------------------------------------
 # Celery App
 # -----------------------------------------------

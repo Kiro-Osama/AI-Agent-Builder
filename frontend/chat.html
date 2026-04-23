@@ -250,7 +250,8 @@
             <div class="model-selector" style="margin-right:10px;">
                 <div class="model-label">Provider</div>
                 <select id="chatLlmProvider" onchange="syncChatProviderUi()" style="min-width:120px;padding:6px 10px;border-radius:8px;border:1px solid rgba(124,58,237,0.35);background:rgba(15,15,35,0.9);color:#e2e8f0;font-size:12px;">
-                    <option value="openrouter" selected>OpenRouter</option>
+                    <option value="gemini" selected>Gemini (primary)</option>
+                    <option value="openrouter">OpenRouter</option>
                     <option value="ollama">Ollama (local)</option>
                     <option value="ollama_remote">Ollama (remote)</option>
                 </select>
@@ -573,12 +574,16 @@
             const ms = document.getElementById('modelSelect');
             if (!prov || !ms || !wrap) return;
             const ollama = prov.value === 'ollama' || prov.value === 'ollama_remote';
-            ms.disabled = ollama;
-            wrap.style.opacity = ollama ? '0.5' : '1';
+            const gemini = prov.value === 'gemini';
+            ms.disabled = ollama || gemini;
+            wrap.style.opacity = (ollama || gemini) ? '0.5' : '1';
             if (ollama) {
                 selectedModel = null;
                 document.getElementById('agentModel').textContent =
                     prov.value === 'ollama_remote' ? 'Ollama (remote)' : 'Ollama (local)';
+            } else if (gemini) {
+                selectedModel = null;
+                document.getElementById('agentModel').textContent = 'gemini-3.1-flash-lite-preview';
             } else if (agentConfig) {
                 onModelChange();
             }

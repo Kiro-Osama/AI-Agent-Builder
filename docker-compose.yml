@@ -3,6 +3,14 @@
 # ============================================
 # All services orchestrated via Docker Compose
 # Usage: make up | docker-compose up -d
+#
+# Architecture:
+#   api            → FastAPI gateway (routes requests)
+#   worker         → Celery (async build pipeline via LangGraph)
+#   agent-engine   → DeepAgent runtime (executes built agents in isolation)
+#   db             → PostgreSQL + pgvector
+#   redis          → Celery broker + cache
+#   frontend       → Nginx dashboard
 # ============================================
 
 services:
@@ -53,6 +61,8 @@ services:
     env_file: .env
     ports:
       - "8000:8000"
+    environment:
+      - AGENT_ENGINE_URL=http://agent-engine:8001
     volumes:
       - ./api:/app/api
       - ./core:/app/core
@@ -93,6 +103,37 @@ services:
         condition: service_healthy
 
   # -------------------------------------------
+  # DeepAgent Engine (Isolated Agent Runtime)
+  # -------------------------------------------
+  # Runs built agents in a sandboxed container.
+  # Skills mounted read-only, workspace is writable.
+  # Each agent uses create_deep_agent() with:
+  #   - FilesystemBackend (sandboxed /app/workspace)
+  #   - Progressive skill disclosure (reads SKILL.md → scripts/ → reference/)
+  #   - MCP tools via langchain_mcp_adapters
+  agent-engine:
+    build:
+      context: .
+      dockerfile: agent_engine/Dockerfile
+    container_name: agentbuilder-agent-engine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - SKILLS_DIR=/app/skills/skills
+      - WORKSPACE_DIR=/app/workspace
+    volumes:
+      - ./agent_engine:/app/agent_engine
+      - ./core:/app/core
+      - ./skills/skills:/app/skills/skills:ro
+      - agent_workspace:/app/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # -------------------------------------------
   # Frontend Dashboard (Nginx)
   # -------------------------------------------
   frontend:
@@ -124,4 +165,6 @@ volumes:
   pgdata:
     driver: local
   redisdata:
+    driver: local
+  agent_workspace:
     driver: local

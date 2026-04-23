@@ -83,8 +83,9 @@
                     <div class="form-options">
                         <div class="option-group">
                             <label>LLM provider</label>
-                            <select id="llmProviderSelect" title="OpenRouter cloud; Ollama local (OLLAMA_BASE_URL); Ollama remote (OLLAMA_REMOTE_BASE_URL, e.g. ngrok)">
-                                <option value="openrouter" selected>OpenRouter</option>
+                            <select id="llmProviderSelect" title="Gemini (primary); OpenRouter cloud; Ollama local/remote">
+                                <option value="gemini" selected>Gemini (primary)</option>
+                                <option value="openrouter">OpenRouter</option>
                                 <option value="ollama">Ollama (local)</option>
                                 <option value="ollama_remote">Ollama (remote / tunnel)</option>
                             </select>
@@ -143,8 +144,9 @@
                         </div>
                         <div class="option-group">
                             <label>LLM provider</label>
-                            <select id="manualLlmProvider" title="Remote: set OLLAMA_REMOTE_BASE_URL + OLLAMA_REMOTE_API_KEY in .env">
-                                <option value="openrouter" selected>OpenRouter</option>
+                            <select id="manualLlmProvider" title="Gemini (primary); OpenRouter; Ollama">
+                                <option value="gemini" selected>Gemini (primary)</option>
+                                <option value="openrouter">OpenRouter</option>
                                 <option value="ollama">Ollama (local)</option>
                                 <option value="ollama_remote">Ollama (remote)</option>
                             </select>
@@ -205,7 +207,8 @@
                         <div class="option-group">
                             <label>LLM provider</label>
                             <select id="wfLlmProvider" title="Applies to workflow planning and each sub-agent build">
-                                <option value="openrouter" selected>OpenRouter</option>
+                                <option value="gemini" selected>Gemini (primary)</option>
+                                <option value="openrouter">OpenRouter</option>
                                 <option value="ollama">Ollama (local)</option>
                                 <option value="ollama_remote">Ollama (remote)</option>
                             </select>

@@ -1,18 +1,17 @@
 """
 Chat Router - DeepAgent Execution
 =====================================
-POST /api/v1/chat/{task_id}   - Chat with a built agent (DeepAgent + MCP tools)
+POST /api/v1/chat/{task_id}   - Chat with a built agent
 GET  /api/v1/chat/{task_id}/info - Get agent info
 
-On first message:
-    1. Load agent config from build history
-    2. Load MCP tools via langchain_mcp_adapters
-    3. Create DeepAgent with skills + MCP tools + FilesystemBackend
-    4. Execute agent (progressive skill disclosure, sub-agent spawning)
-
-Subsequent messages:
-    Reuse conversation history, re-create DeepAgent per request
-    (DeepAgent is stateless; history is passed in messages)
+On each message:
+    1. Load agent config from build history (system_prompt, skills, mcps)
+    2. Send execution request to the agent-engine Docker service
+    3. The agent-engine creates a DeepAgent with:
+       - Skills loaded via progressive disclosure (SKILL.md → scripts/ → reference/)
+       - MCP tools loaded via langchain_mcp_adapters
+       - Sandboxed workspace via FilesystemBackend
+    4. Return response + tool calls
 """
 import logging
 import os
@@ -24,8 +23,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.deep_agent_runtime import run_deep_agent
-from core.mcp_adapter import load_mcp_tools_for_agent
+from core.agent_engine_client import execute_on_agent_engine
 from core.db import get_db
 from core.mcp_user_config import mcp_config_required_for_modal
 from core.models import BuildHistory
@@ -149,30 +147,17 @@ async def chat_with_agent(
     # Resolve model
     model = _resolve_model(request.model, config["model"], request.llm_provider)
 
-    # Load MCP tools via langchain_mcp_adapters
+    # Send to agent-engine Docker service
     selected_mcps = config.get("selected_mcps", [])
-    mcp_tools = []
-    if selected_mcps:
-        try:
-            mcp_tools = await load_mcp_tools_for_agent(
-                selected_mcps,
-                mcp_user_configs=request.mcp_configs,
-            )
-            logger.info(
-                "[Chat] Loaded %d MCP tools for %s",
-                len(mcp_tools), config["agent_name"],
-            )
-        except Exception as e:
-            logger.error("[Chat] Failed to load MCP tools: %s", e)
 
-    # Run DeepAgent
     try:
-        result = await run_deep_agent(
+        result = await execute_on_agent_engine(
             system_prompt=config["system_prompt"],
             user_message=request.message,
             history=history,
-            mcp_tools=mcp_tools if mcp_tools else None,
             skill_ids=config.get("selected_skills"),
+            mcp_configs=selected_mcps,
+            mcp_user_configs=request.mcp_configs,
             model=model,
         )
 
@@ -189,11 +174,11 @@ async def chat_with_agent(
             conversation_id=conv_id,
             tool_calls=[ToolCallInfo(**tc) for tc in result.get("tool_calls", [])],
             iterations=result.get("iterations", 1),
-            mcps_connected=len(mcp_tools),
+            mcps_connected=len(selected_mcps),
         )
 
     except Exception as e:
-        logger.error("[Chat] Agent loop error: %s", e, exc_info=True)
+        logger.error("[Chat] Agent engine error: %s", e, exc_info=True)
         raise HTTPException(500, f"Chat failed: {str(e)}")
 
 
