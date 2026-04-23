@@ -1,8 +1,11 @@
 """
 Workflow Session Manager
 =========================
-Manages multiple AgentSessions for a multi-agent workflow chat.
+Manages workflow state for multi-agent DeepAgent workflows.
 Handles shared state, inter-agent routing, and execution logging.
+
+Note: With the DeepAgent migration, this no longer manages MCP containers.
+Each agent is stateless; MCP tools are loaded per-call via core.mcp_adapter.
 """
 import asyncio
 import json
@@ -11,7 +14,6 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from core.agent_session import AgentSession
 from core.workflow_topologies import TopologyType
 
 logger = logging.getLogger(__name__)
@@ -19,17 +21,11 @@ logger = logging.getLogger(__name__)
 
 class WorkflowSession:
     """
-    Holds running agent sessions for a multi-agent workflow.
+    Manages workflow state for multi-agent DeepAgent workflows.
 
-    Attributes:
-        workflow_id: Unique workflow identifier.
-        topology: The execution topology type.
-        agents: role -> agent config dict (from workflow_config.agents).
-        sessions: role -> AgentSession (one per agent).
-        shared_state: Inter-agent data store.
-        routing_config: Topology-specific routing rules.
-        current_agent: Currently active agent role.
-        execution_log: Full message routing log.
+    With the DeepAgent migration, this no longer manages MCP container sessions.
+    Each agent call is stateless — MCP tools are loaded per-call via mcp_adapter.
+    This class tracks: configs, conversation history, shared state, execution log.
     """
 
     def __init__(
@@ -44,7 +40,6 @@ class WorkflowSession:
         self.workflow_id = workflow_id
         self.topology = TopologyType(topology)
         self.agent_configs: dict[str, dict] = {a["role"]: a for a in agents}
-        self.sessions: dict[str, AgentSession] = {}
         self.shared_state: dict[str, Any] = {}
         self.routing_rules = routing_rules or {}
         self.shared_state_schema = shared_state_schema or {}
@@ -60,32 +55,16 @@ class WorkflowSession:
         return list(self.agent_configs.keys())
 
     async def start(self) -> None:
-        """Start an AgentSession for each agent in the workflow."""
+        """Initialize the workflow session (no MCP containers — DeepAgent is stateless)."""
         logger.info(
-            "[WorkflowSession:%s] Starting %d agent sessions (topology=%s)",
+            "[WorkflowSession:%s] Initializing %d agents (topology=%s)",
             self.workflow_id,
             len(self.agent_configs),
             self.topology.value,
         )
 
-        for role, config in self.agent_configs.items():
-            session_id = f"wf-{self.workflow_id}-{role}"
-            session = AgentSession(
-                session_id=session_id,
-                mcp_user_configs=self.mcp_user_configs,
-            )
-
-            selected_mcps = config.get("selected_mcps", [])
-            await session.start(selected_mcps)
-            self.sessions[role] = session
+        for role in self.agent_configs:
             self.conversation_history[role] = []
-
-            logger.info(
-                "[WorkflowSession:%s] Agent '%s' ready (%d tools)",
-                self.workflow_id,
-                role,
-                len(session.all_tools),
-            )
 
         # Set initial agent based on topology
         if self.topology == TopologyType.SUPERVISOR:
@@ -103,13 +82,10 @@ class WorkflowSession:
 
         self.active = True
         logger.info(
-            "[WorkflowSession:%s] All sessions started. Initial agent: %s",
+            "[WorkflowSession:%s] Ready. Initial agent: %s",
             self.workflow_id,
             self.current_agent,
         )
-
-    def get_agent_session(self, role: str) -> AgentSession | None:
-        return self.sessions.get(role)
 
     def get_agent_config(self, role: str) -> dict:
         return self.agent_configs.get(role, {})
@@ -195,13 +171,9 @@ class WorkflowSession:
         self.conversation_history[role].append(message)
 
     async def cleanup(self) -> None:
-        """Stop all per-session MCP containers."""
+        """Cleanup workflow session (DeepAgent is stateless, nothing to stop)."""
         logger.info("[WorkflowSession:%s] Cleaning up...", self.workflow_id)
-        await asyncio.gather(
-            *[s.cleanup() for s in self.sessions.values()],
-            return_exceptions=True,
-        )
-        self.sessions.clear()
+        self.conversation_history.clear()
         self.active = False
         logger.info("[WorkflowSession:%s] Cleanup done", self.workflow_id)
 
@@ -214,8 +186,8 @@ class WorkflowSession:
                 role: {
                     "role": role,
                     "agent_name": cfg.get("agent_name", ""),
-                    "tools_count": len(self.sessions[role].all_tools) if role in self.sessions else 0,
-                    "active": role in self.sessions and self.sessions[role].active,
+                    "skills": cfg.get("selected_skills", []),
+                    "mcps_count": len(cfg.get("selected_mcps", [])),
                 }
                 for role, cfg in self.agent_configs.items()
             },

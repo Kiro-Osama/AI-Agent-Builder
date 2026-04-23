@@ -2,7 +2,11 @@
 Workflow Executors
 ===================
 Topology-specific execution strategies for multi-agent workflows.
-Each executor orchestrates message flow between agents in a WorkflowSession.
+Each executor orchestrates message flow between agents using DeepAgents.
+
+Architecture: Each agent in the workflow is executed via core.deep_agent_runtime
+which uses create_deep_agent() with progressive skill disclosure, sandboxing,
+and MCP tool integration.
 """
 import asyncio
 import json
@@ -10,7 +14,8 @@ import logging
 import re
 from typing import Any
 
-from core.agent_loop import run_agent_loop
+from core.deep_agent_runtime import run_deep_agent
+from core.mcp_adapter import load_mcp_tools_for_agent
 from core.workflow_session import WorkflowSession
 from core.workflow_topologies import TopologyType, get_swarm_handoff_instructions
 
@@ -120,12 +125,11 @@ async def _run_single_agent(
     user_message: str,
     extra_context: str = "",
 ) -> dict:
-    """Run one agent's ReAct loop and return the result dict."""
-    agent_session = session.get_agent_session(role)
-    if not agent_session:
-        return {"response": f"Error: No session for agent '{role}'", "tool_calls": [], "model": "", "iterations": 0}
-
+    """Run one agent's DeepAgent loop and return the result dict."""
     config = session.get_agent_config(role)
+    if not config:
+        return {"response": f"Error: No config for agent '{role}'", "tool_calls": [], "model": "", "iterations": 0}
+
     system_prompt = session.get_system_prompt(role)
     if extra_context:
         system_prompt += f"\n\n{extra_context}"
@@ -133,11 +137,24 @@ async def _run_single_agent(
     model = config.get("model", "")
     history = session.get_history(role)
 
-    result = await run_agent_loop(
-        session=agent_session,
+    # Load MCP tools for this agent if it has any
+    mcp_tools = None
+    selected_mcps = config.get("selected_mcps", [])
+    if selected_mcps:
+        try:
+            mcp_tools = await load_mcp_tools_for_agent(selected_mcps)
+        except Exception as e:
+            logger.warning("[Workflow] MCP tool loading failed for %s: %s", role, e)
+
+    # Get skill IDs for this agent
+    skill_ids = config.get("selected_skills", [])
+
+    result = await run_deep_agent(
         system_prompt=system_prompt,
-        history=history,
         user_message=user_message,
+        history=history,
+        mcp_tools=mcp_tools,
+        skill_ids=skill_ids if skill_ids else None,
         model=model or None,
     )
 

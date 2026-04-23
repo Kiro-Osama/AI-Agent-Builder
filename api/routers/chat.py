@@ -1,16 +1,18 @@
 """
-Chat Router - Real Agent Execution
+Chat Router - DeepAgent Execution
 =====================================
-POST /api/v1/chat/{task_id}   - Chat with a built agent (real tool calling)
+POST /api/v1/chat/{task_id}   - Chat with a built agent (DeepAgent + MCP tools)
 GET  /api/v1/chat/{task_id}/info - Get agent info
 
 On first message:
     1. Load agent config from build history
-    2. Start MCP container sessions
-    3. Run agent loop (ReAct: LLM ↔ MCP tools)
+    2. Load MCP tools via langchain_mcp_adapters
+    3. Create DeepAgent with skills + MCP tools + FilesystemBackend
+    4. Execute agent (progressive skill disclosure, sub-agent spawning)
 
 Subsequent messages:
-    Reuse existing MCP sessions + conversation history
+    Reuse conversation history, re-create DeepAgent per request
+    (DeepAgent is stateless; history is passed in messages)
 """
 import logging
 import os
@@ -22,21 +24,15 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.agent_loop import run_agent_loop
-from core.agent_session import (
-    cleanup_sessions_matching_conversation_id,
-    create_session,
-    get_session,
-    session_key as composite_session_key,
-)
+from core.deep_agent_runtime import run_deep_agent
+from core.mcp_adapter import load_mcp_tools_for_agent
 from core.db import get_db
 from core.mcp_user_config import mcp_config_required_for_modal
 from core.models import BuildHistory
-from core.ollama_client import use_llm_provider
 
 logger = logging.getLogger(__name__)
 
-LlmProvider = Literal["openrouter", "ollama", "ollama_remote"]
+LlmProvider = Literal["openrouter", "ollama", "ollama_remote", "gemini"]
 router = APIRouter()
 
 # In-memory: composite key task_id:conversation_id -> message list
@@ -45,7 +41,12 @@ conversations: dict[str, list[dict]] = {}
 # Cache agent configs loaded from DB (keyed by task_id)
 agent_configs: dict[str, dict] = {}
 
-DEFAULT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "openrouter/free")
+DEFAULT_MODEL = os.getenv("DEEPAGENT_MODEL", os.getenv("DEFAULT_CHAT_MODEL", "gemini-3.1-flash-lite-preview"))
+
+
+def _session_key(task_id: str, conversation_id: str) -> str:
+    """Composite key so chat state cannot leak across different builds."""
+    return f"{task_id}:{conversation_id}"
 
 
 class ChatRequest(BaseModel):
@@ -102,6 +103,29 @@ async def _load_agent_config(db: AsyncSession, task_id: str) -> dict:
     return cfg
 
 
+def _resolve_model(request_model: str | None, config_model: str, llm_provider: str | None) -> str:
+    """
+    Resolve which model to use based on request, config, and provider.
+    Supports: gemini, ollama, openrouter.
+    """
+    if request_model:
+        return request_model
+
+    if llm_provider == "ollama":
+        ollama_model = os.getenv("OLLAMA_MODEL", "qwen3.5:4b-q4_K_M")
+        return f"ollama:{ollama_model}"
+
+    if llm_provider == "ollama_remote":
+        remote_model = os.getenv("OLLAMA_REMOTE_MODEL", "qwen3.5:4b")
+        return f"ollama:{remote_model}"
+
+    if llm_provider == "gemini" or os.getenv("GOOGLE_API_KEY", "").strip():
+        return os.getenv("DEEPAGENT_MODEL", "gemini-3.1-flash-lite-preview")
+
+    # Use the model from build config
+    return config_model or DEFAULT_MODEL
+
+
 @router.post("/chat/{task_id}", response_model=ChatResponse)
 async def chat_with_agent(
     task_id: str,
@@ -110,59 +134,51 @@ async def chat_with_agent(
 ):
     """
     Send a message to a built agent.
-    The agent uses real MCP tools via JSON-RPC — not simulated.
+    Uses DeepAgent with progressive skill disclosure and MCP tools.
     """
     config = await _load_agent_config(db, task_id)
 
     conv_id = request.conversation_id or str(uuid.uuid4())
-    key = composite_session_key(task_id, conv_id)
+    key = _session_key(task_id, conv_id)
 
     if key not in conversations:
         conversations[key] = []
 
     history = conversations[key]
 
-    agent_session = get_session(key)
-    if not agent_session:
-        agent_session = create_session(key, mcp_user_configs=request.mcp_configs)
-        selected_mcps = config.get("selected_mcps", [])
+    # Resolve model
+    model = _resolve_model(request.model, config["model"], request.llm_provider)
 
-        if selected_mcps:
+    # Load MCP tools via langchain_mcp_adapters
+    selected_mcps = config.get("selected_mcps", [])
+    mcp_tools = []
+    if selected_mcps:
+        try:
+            mcp_tools = await load_mcp_tools_for_agent(
+                selected_mcps,
+                mcp_user_configs=request.mcp_configs,
+            )
             logger.info(
-                f"[Chat] Starting MCP session for {key}: "
-                f"{[m.get('mcp_name') for m in selected_mcps]}"
+                "[Chat] Loaded %d MCP tools for %s",
+                len(mcp_tools), config["agent_name"],
             )
-            try:
-                await agent_session.start(selected_mcps)
-            except Exception as e:
-                logger.error(f"[Chat] Failed to start MCP session: {e}")
+        except Exception as e:
+            logger.error("[Chat] Failed to load MCP tools: %s", e)
 
-            if agent_session.errors and not agent_session.containers:
-                raise HTTPException(
-                    503,
-                    f"All MCP tools failed to start: {'; '.join(agent_session.errors)}"
-                )
-
-    if request.model:
-        model = request.model
-    else:
-        model = config["model"]
-        if os.getenv("APP_ENV") == "development":
-            if any(x in model for x in ["claude", "gpt-4", "gemini-pro"]):
-                model = DEFAULT_MODEL
-
+    # Run DeepAgent
     try:
-        with use_llm_provider(request.llm_provider):
-            result = await run_agent_loop(
-                session=agent_session,
-                system_prompt=config["system_prompt"],
-                history=history,
-                user_message=request.message,
-                model=model,
-            )
+        result = await run_deep_agent(
+            system_prompt=config["system_prompt"],
+            user_message=request.message,
+            history=history,
+            mcp_tools=mcp_tools if mcp_tools else None,
+            skill_ids=config.get("selected_skills"),
+            model=model,
+        )
 
         response_text = result["response"]
 
+        # Update conversation history
         history.append({"role": "user", "content": request.message})
         history.append({"role": "assistant", "content": response_text})
 
@@ -173,11 +189,11 @@ async def chat_with_agent(
             conversation_id=conv_id,
             tool_calls=[ToolCallInfo(**tc) for tc in result.get("tool_calls", [])],
             iterations=result.get("iterations", 1),
-            mcps_connected=len(agent_session.containers),
+            mcps_connected=len(mcp_tools),
         )
 
     except Exception as e:
-        logger.error(f"[Chat] Agent loop error: {e}", exc_info=True)
+        logger.error("[Chat] Agent loop error: %s", e, exc_info=True)
         raise HTTPException(500, f"Chat failed: {str(e)}")
 
 
@@ -213,8 +229,7 @@ async def get_agent_info(task_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.delete("/chat/{conversation_id}/session")
 async def end_session(conversation_id: str):
-    """Explicitly end a chat session and cleanup MCP containers."""
-    await cleanup_sessions_matching_conversation_id(conversation_id)
+    """Explicitly end a chat session and cleanup."""
     # Remove all conversation histories for this conversation_id across tasks
     keys_to_drop = [k for k in list(conversations.keys()) if k.endswith(f":{conversation_id}")]
     for k in keys_to_drop:

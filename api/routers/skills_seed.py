@@ -45,6 +45,22 @@ CATEGORY_MAP: dict[str, str] = {
 }
 
 
+def _catalog_skill_files(skill_dir: Path) -> list[dict[str, Any]]:
+    """
+    List all files in a skill directory for DeepAgent progressive disclosure.
+    The agent uses read_file/execute tools to access these on-demand.
+    """
+    files: list[dict[str, Any]] = []
+    for f in sorted(skill_dir.rglob("*")):
+        if f.is_file() and f.name not in ("LICENSE.txt", ".gitkeep"):
+            files.append({
+                "relative_path": str(f.relative_to(skill_dir)),
+                "size_bytes": f.stat().st_size,
+                "type": f.suffix.lstrip(".") or "unknown",
+            })
+    return files
+
+
 def _parse_skill_md(path: Path) -> dict[str, Any] | None:
     """Parse a SKILL.md file, extracting YAML frontmatter and markdown body."""
     try:
@@ -68,6 +84,9 @@ def _parse_skill_md(path: Path) -> dict[str, Any] | None:
     if not name:
         return None
 
+    # Catalog all files in the skill folder for DeepAgent discovery
+    file_catalog = _catalog_skill_files(path.parent)
+
     return {
         "skill_id": name,
         "skill_name": name.replace("-", " ").title(),
@@ -75,6 +94,7 @@ def _parse_skill_md(path: Path) -> dict[str, Any] | None:
         "license": fm.get("license", ""),
         "system_prompt": body,
         "folder_path": str(path.parent),
+        "file_catalog": file_catalog,
     }
 
 
@@ -92,6 +112,7 @@ def _scan_disk() -> list[dict[str, Any]]:
             if parsed:
                 results.append(parsed)
     return results
+
 
 
 class SeedRequest(BaseModel):
@@ -166,6 +187,8 @@ async def seed_skills(
         skill_data = {}
         if s.get("license"):
             skill_data["license"] = s["license"]
+        if s.get("file_catalog"):
+            skill_data["file_catalog"] = s["file_catalog"]
 
         if sid in existing:
             row = existing[sid]

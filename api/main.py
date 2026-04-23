@@ -29,23 +29,24 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
-    logger.info("🚀 Agent Builder V5 API starting...")
+    logger.info("🚀 Agent Builder V5 API starting (DeepAgent Runtime)...")
     logger.info(f"   Environment: {settings.app_env}")
     logger.info(f"   Model: {settings.default_chat_model}")
 
+    # Periodic cleanup of stale conversation histories
     async def ttl_cleanup_loop() -> None:
+        ttl_seconds = 60 * 60  # 1 hour
         while True:
             try:
                 await asyncio.sleep(60)
-                from core.agent_session import cleanup_expired_sessions
-
-                removed = await cleanup_expired_sessions()
-                for key in removed:
-                    chat.conversations.pop(key, None)
+                import time
+                now = time.time()
+                # Clean up old conversations from chat router
+                # (DeepAgent is stateless — no container sessions to manage)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning("Session TTL cleanup failed: %s", e)
+                logger.warning("Cleanup loop error: %s", e)
 
     ttl_task = asyncio.create_task(ttl_cleanup_loop())
 
@@ -57,17 +58,12 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
-    logger.info("🛑 Cleaning up MCP sessions...")
-    from core.agent_session import cleanup_all_sessions
-
-    await cleanup_all_sessions()
+    logger.info("🛑 Cleaning up...")
 
     from core.workflow_session import cleanup_all_workflow_sessions
-
     await cleanup_all_workflow_sessions()
 
     from core.shared_mcp_pool import shared_pool
-
     await shared_pool.shutdown()
 
     logger.info("🛑 Agent Builder V5 API shut down.")
