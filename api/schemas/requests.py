@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-LlmProvider = Literal["openrouter", "ollama", "ollama_remote"]
+LlmProvider = Literal["gemini", "openrouter", "ollama", "ollama_remote"]
 
 
 class BuildRequest(BaseModel):

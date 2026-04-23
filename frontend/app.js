@@ -44,34 +44,56 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+const openrouterOptions = `
+    <option value="">Auto-select (recommended)</option>
+    <option value="google/gemma-3-27b-it:free">Gemma 3 27B (Free)</option>
+    <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (Free)</option>
+    <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+    <option value="openai/gpt-4o">GPT-4o</option>
+`;
+
+const geminiOptions = `
+    <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flash Lite (Preview)</option>
+    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+`;
+
+function syncProviderOptions(provValue, selectElement, groupElement) {
+    if (!selectElement || !groupElement) return;
+    
+    if (provValue === 'gemini') {
+        selectElement.innerHTML = geminiOptions;
+        selectElement.disabled = false;
+        groupElement.style.opacity = '1';
+    } else if (provValue === 'ollama' || provValue === 'ollama_remote') {
+        selectElement.innerHTML = '<option value="">Ollama Model (configured in backend)</option>';
+        selectElement.disabled = true;
+        groupElement.style.opacity = '0.5';
+    } else {
+        selectElement.innerHTML = openrouterOptions;
+        selectElement.disabled = false;
+        groupElement.style.opacity = '1';
+    }
+}
+
 function syncAiProviderUi() {
     const prov = document.getElementById('llmProviderSelect');
     const grp = document.getElementById('aiModelGroup');
     if (!prov || !grp) return;
-    const ollama = prov.value === 'ollama' || prov.value === 'ollama_remote';
-    const sel = grp.querySelector('select');
-    if (sel) sel.disabled = ollama;
-    grp.style.opacity = ollama ? '0.5' : '1';
+    syncProviderOptions(prov.value, grp.querySelector('select'), grp);
 }
 
 function syncManualProviderUi() {
     const prov = document.getElementById('manualLlmProvider');
     const grp = document.getElementById('manualModelGroup');
     if (!prov || !grp) return;
-    const ollama = prov.value === 'ollama' || prov.value === 'ollama_remote';
-    const sel = grp.querySelector('select');
-    if (sel) sel.disabled = ollama;
-    grp.style.opacity = ollama ? '0.5' : '1';
+    syncProviderOptions(prov.value, grp.querySelector('select'), grp);
 }
 
 function syncWfProviderUi() {
     const prov = document.getElementById('wfLlmProvider');
     const grp = document.getElementById('wfModelGroup');
     if (!prov || !grp) return;
-    const ollama = prov.value === 'ollama' || prov.value === 'ollama_remote';
-    const sel = grp.querySelector('select');
-    if (sel) sel.disabled = ollama;
-    grp.style.opacity = ollama ? '0.5' : '1';
+    syncProviderOptions(prov.value, grp.querySelector('select'), grp);
 }
 
 function setupCharCounter() {
@@ -122,11 +144,11 @@ async function submitBuild() {
 
     const provEl = document.getElementById('llmProviderSelect');
     const llmProv = provEl ? provEl.value : 'openrouter';
-    const useOllama = llmProv === 'ollama' || llmProv === 'ollama_remote';
+    const ignoreModel = llmProv === 'ollama' || llmProv === 'ollama_remote';
     const payload = {
         query: query,
         llm_provider: llmProv,
-        preferred_model: useOllama ? null : (document.getElementById('modelSelect').value || null),
+        preferred_model: ignoreModel ? null : (document.getElementById('modelSelect').value || null),
         max_mcps: parseInt(document.getElementById('maxMcps').value, 10),
         max_skills: parseInt(document.getElementById('maxSkills').value, 10),
         enable_skill_creation: document.getElementById('enableSkills').checked,
@@ -813,7 +835,7 @@ async function submitWorkflowBuild() {
 
     const wfProvEl = document.getElementById('wfLlmProvider');
     const wfLlmProv = wfProvEl ? wfProvEl.value : 'openrouter';
-    const wfOllama = wfLlmProv === 'ollama' || wfLlmProv === 'ollama_remote';
+    const ignoreModel = wfLlmProv === 'ollama' || wfLlmProv === 'ollama_remote';
     const awaitChk = document.getElementById('wfAwaitPlanApproval');
     const wfMcpsEl = document.getElementById('wfSubBuildMaxMcps');
     const wfSkillsEl = document.getElementById('wfSubBuildMaxSkills');
@@ -821,7 +843,7 @@ async function submitWorkflowBuild() {
         query: query,
         topology_hint: document.getElementById('wfTopology').value || 'auto',
         llm_provider: wfLlmProv,
-        preferred_model: wfOllama ? null : (document.getElementById('wfModel').value || null),
+        preferred_model: ignoreModel ? null : (document.getElementById('wfModel').value || null),
         await_plan_approval: !!(awaitChk && awaitChk.checked),
         sub_build_max_mcps: wfMcpsEl ? parseInt(wfMcpsEl.value, 10) : 3,
         sub_build_max_skills: wfSkillsEl ? parseInt(wfSkillsEl.value, 10) : 8,

@@ -144,6 +144,8 @@ services:
     restart: unless-stopped
     ports:
       - "0.0.0.0:3000:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
     depends_on:
       - api
 

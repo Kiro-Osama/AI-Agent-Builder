@@ -40,7 +40,7 @@ from core.workflow_executor import execute_workflow
 
 logger = logging.getLogger(__name__)
 
-LlmProvider = Literal["openrouter", "ollama", "ollama_remote"]
+LlmProvider = Literal["gemini", "openrouter", "ollama", "ollama_remote"]
 router = APIRouter()
 
 # Celery client for dispatching workflow build tasks

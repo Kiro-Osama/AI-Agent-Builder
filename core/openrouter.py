@@ -24,6 +24,49 @@ from core.ollama_client import (
 
 logger = logging.getLogger(__name__)
 
+async def gemini_chat_completion(
+    messages: list[dict],
+    model: str,
+    temperature: float = 0.7,
+) -> dict[str, Any]:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+
+    lc_messages = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content", "")
+        if role == "system":
+            lc_messages.append(SystemMessage(content=content))
+        elif role == "user":
+            lc_messages.append(HumanMessage(content=content))
+        elif role == "assistant":
+            lc_messages.append(AIMessage(content=content))
+
+    llm = ChatGoogleGenerativeAI(
+        model=model,
+        temperature=temperature,
+        google_api_key=os.getenv("GOOGLE_API_KEY")
+    )
+    result = await llm.ainvoke(lc_messages)
+
+    content_val = result.content
+    if isinstance(content_val, list):
+        content_val = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in content_val])
+    elif not isinstance(content_val, str):
+        content_val = str(content_val)
+
+    return {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": content_val
+                }
+            }
+        ]
+    }
+
 # -----------------------------------------------
 # Configuration (env-driven; no secrets in repo)
 # -----------------------------------------------
@@ -117,6 +160,13 @@ class OpenRouterClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=response_format,
+            )
+
+        if backend == "gemini":
+            return await gemini_chat_completion(
+                messages=messages,
+                model=route_model,
+                temperature=temperature,
             )
 
         if not self.api_keys:
@@ -256,7 +306,12 @@ class OpenRouterClient:
     ) -> str:
         """Convenience method that returns just the text content."""
         result = await self.chat_completion(messages, model=model, temperature=temperature)
-        return result["choices"][0]["message"]["content"]
+        content = result["choices"][0]["message"]["content"]
+        if isinstance(content, list):
+            content = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in content])
+        elif not isinstance(content, str):
+            content = str(content)
+        return content
 
     async def chat_completion_json(
         self,
@@ -278,6 +333,11 @@ class OpenRouterClient:
         # Some models return content=null when they emit tool_calls instead.
         # Extract text from tool_call arguments as a fallback.
         content = message.get("content") or ""
+        if isinstance(content, list):
+            content = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in content])
+        elif not isinstance(content, str):
+            content = str(content)
+
         if not content and message.get("tool_calls"):
             try:
                 content = message["tool_calls"][0]["function"]["arguments"]

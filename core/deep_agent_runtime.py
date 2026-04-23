@@ -373,10 +373,18 @@ def _extract_response(result: dict) -> str:
     # Walk backwards to find the last AI/assistant message with text content
     for msg in reversed(messages):
         content = None
-        if hasattr(msg, "content"):
-            content = msg.content
+        
+        # 1. LangChain BaseMessage objects
+        if hasattr(msg, "type"):
+            if msg.type in ("ai", "assistant"):
+                content = msg.content if hasattr(msg, "content") else None
+                
+        # 2. Raw dicts
         elif isinstance(msg, dict):
-            content = msg.get("content")
+            if msg.get("role") in ("assistant", "ai") or msg.get("type") in ("ai", "assistant"):
+                content = msg.get("content")
+                
+        # 3. Tuples (role, content)
         elif isinstance(msg, tuple) and len(msg) >= 2:
             if msg[0] in ("assistant", "ai"):
                 content = msg[1]

@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
     <!-- Background Orbs -->
@@ -103,6 +103,7 @@
                         <div class="option-group">
                             <label>Max MCPs</label>
                             <select id="maxMcps">
+                                <option value="0">0</option>
                                 <option value="3">3</option>
                                 <option value="5" selected>5</option>
                                 <option value="10">10</option>
@@ -111,6 +112,7 @@
                         <div class="option-group">
                             <label>Max skills</label>
                             <select id="maxSkills" title="How many catalog skills similarity search returns for filtering">
+                                <option value="0">0</option>
                                 <option value="3">3</option>
                                 <option value="5">5</option>
                                 <option value="8" selected>8</option>
@@ -234,6 +236,7 @@
                         <div class="option-group">
                             <label>Sub-build max MCPs</label>
                             <select id="wfSubBuildMaxMcps" title="Per-agent build inside this workflow">
+                                <option value="0">0</option>
                                 <option value="2">2</option>
                                 <option value="3" selected>3</option>
                                 <option value="5">5</option>
@@ -243,6 +246,7 @@
                         <div class="option-group">
                             <label>Sub-build max skills</label>
                             <select id="wfSubBuildMaxSkills" title="Catalog skills retrieved per sub-agent build">
+                                <option value="0">0</option>
                                 <option value="3">3</option>
                                 <option value="5">5</option>
                                 <option value="8" selected>8</option>
@@ -434,6 +438,6 @@
         </section>
     </main>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=2"></script>
 </body>
 </html>

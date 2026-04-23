@@ -295,6 +295,11 @@ select:focus {
     border-color: var(--accent-purple);
 }
 
+select option {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
 /* Toggle Switch */
 .toggle {
     position: relative;

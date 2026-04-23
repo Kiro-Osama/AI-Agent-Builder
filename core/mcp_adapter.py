@@ -123,10 +123,10 @@ async def load_mcp_tools_for_agent(
             list(server_configs.keys()),
         )
 
-        async with MultiServerMCPClient(server_configs) as client:
-            tools = await client.get_tools()
-            logger.info("[MCPAdapter] ✅ Loaded %d tools from MCP servers", len(tools))
-            return tools
+        client = MultiServerMCPClient(server_configs)
+        tools = await client.get_tools()
+        logger.info("[MCPAdapter] ✅ Loaded %d tools from MCP servers", len(tools))
+        return tools
 
     except Exception as e:
         logger.error("[MCPAdapter] Failed to load MCP tools: %s", e, exc_info=True)
@@ -166,7 +166,6 @@ async def load_mcp_tools_persistent(
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         client = MultiServerMCPClient(server_configs)
-        await client.__aenter__()
         tools = await client.get_tools()
         logger.info("[MCPAdapter] Persistent connection: %d tools", len(tools))
         return client, tools

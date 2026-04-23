@@ -19,7 +19,7 @@ from core.ollama_client import default_ollama_model_tag, default_remote_model_ta
 
 logger = logging.getLogger(__name__)
 
-LlmProvider = Literal["openrouter", "ollama", "ollama_remote"]
+LlmProvider = Literal["gemini", "openrouter", "ollama", "ollama_remote"]
 router = APIRouter()
 
 

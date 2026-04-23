@@ -88,8 +88,12 @@ Respond with ONLY a JSON object (no markdown, no explanation):
 """
 
 
-def _robust_json_parse(text: str) -> dict:
+def _robust_json_parse(text: Any) -> dict:
     """Try multiple strategies to extract JSON from LLM response."""
+    if isinstance(text, list):
+        text = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in text])
+    elif not isinstance(text, str):
+        text = str(text)
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)

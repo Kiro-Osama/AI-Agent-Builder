@@ -50,7 +50,7 @@ def use_llm_provider(provider: str | None) -> Iterator[None]:
     norm: str | None = None
     if provider is not None and str(provider).strip():
         p = str(provider).strip().lower()
-        if p in ("openrouter", "ollama", "ollama_remote"):
+        if p in ("openrouter", "ollama", "ollama_remote", "gemini"):
             norm = p
     token = _llm_provider_override.set(norm)
     try:
@@ -131,6 +131,11 @@ def resolve_ollama_route(explicit_model: str | None, fallback_default: str) -> t
             tag = m.split(":", 1)[1].strip() or default_ollama_model_tag()
             return "ollama", tag
         return "openrouter", m
+
+    if override == "gemini":
+        if not m or not m.startswith("gemini-"):
+            return "gemini", os.getenv("DEEPAGENT_MODEL", "gemini-3.1-flash-lite-preview")
+        return "gemini", m
 
     if override == "ollama":
         if m.lower().startswith("ollama:"):
