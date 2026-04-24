@@ -83,17 +83,30 @@ async def load_mcp_tools_for_agent(
                 actual = host_path.replace("/host/workspace", workspace)
                 cmd.extend(["-v", f"{actual}:{container_path}"])
 
-            # Add environment
+            # Add environment and dynamic volumes
             env = dict(run_config.get("environment", {}))
+            command_args = list(run_config.get("command", []))
+            
             if mcp_user_configs and name in mcp_user_configs:
-                env.update(mcp_user_configs[name])
+                user_cfg = mcp_user_configs[name]
+                env.update(user_cfg)
+                
+                # Check if this MCP configures a specific directory (like mcp-filesystem)
+                if "allowed_directory" in user_cfg and user_cfg["allowed_directory"].strip():
+                    host_dir = user_cfg["allowed_directory"].strip()
+                    # Mount the user-provided host path to /user_dir in the container
+                    cmd.extend(["-v", f"{host_dir}:/user_dir"])
+                    
+                    # For mcp-filesystem, we append /user_dir to the allowed paths
+                    if "/user_dir" not in command_args:
+                        command_args.append("/user_dir")
+
             for key, val in env.items():
-                if val and val != "REQUIRED":
+                if val and val != "REQUIRED" and key != "allowed_directory":
                     actual_val = os.getenv(key, val)
                     cmd.extend(["-e", f"{key}={actual_val}"])
 
             cmd.append(docker_image)
-            command_args = run_config.get("command", [])
             if command_args:
                 cmd.extend(command_args)
 

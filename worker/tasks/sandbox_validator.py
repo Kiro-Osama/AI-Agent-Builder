@@ -66,16 +66,17 @@ def validate_skill(self, skill_id: str) -> dict:
         tools_schema = skill_data.get("tools_schema", [])
 
         if not code:
-            # If no code, just validate the schema
-            if tools_schema and skill_data.get("system_prompt"):
+            # If no code, just validate the schema/prompt
+            # A skill can be perfectly valid with just a system_prompt and no tools/code
+            if skill_data.get("system_prompt"):
                 skill.status = "active"
                 session.commit()
-                return {"success": True, "message": "Schema-only skill validated"}
+                return {"success": True, "message": "Prompt-only skill validated"}
             else:
                 skill.status = "failed"
-                skill.error_log = "No code or valid schema found"
+                skill.error_log = "No code, tools, or system_prompt found"
                 session.commit()
-                return {"success": False, "error": "No code or schema"}
+                return {"success": False, "error": "No code, tools, or system_prompt"}
 
         from core.docker_manager import get_docker_manager
 

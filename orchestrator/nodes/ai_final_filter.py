@@ -125,22 +125,6 @@ async def ai_final_filter(state: AgentBuilderState) -> dict:
         }
         selected_skills = [skill_lookup[sid] for sid in selected_skill_ids if sid in skill_lookup]
 
-        # Fallback: if no MCPs selected, keep top similarity match
-        if not selected_mcps and retrieved_mcps:
-            selected_mcps = [retrieved_mcps[0]]
-            logger.warning("  No MCPs selected by filter — keeping top similarity match")
-
-        # Safety net for skills: if retriever found high-similarity skills (≥0.55)
-        # but the LLM dropped all of them, restore the high-confidence ones.
-        if not selected_skills and validated_skills:
-            high_conf = [s for s in validated_skills if s.get("similarity", 0) >= 0.55]
-            if high_conf:
-                selected_skills = high_conf
-                logger.warning(
-                    "  LLM dropped all skills — restoring %d high-similarity skills",
-                    len(high_conf),
-                )
-
         logger.info(f"  Selected: {len(selected_mcps)} MCPs, {len(selected_skills)} Skills")
         return {
             "selected_tools": {

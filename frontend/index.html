@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=2">
+    <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
     <!-- Background Orbs -->
@@ -58,6 +58,7 @@
             <div class="section-header">
                 <h2>🏗️ Build New Agent</h2>
                 <div class="section-header-actions">
+                    <button class="btn-dashboard" onclick="toggleDashboard()" id="dashboardToggle">📊 Dashboard</button>
                     <a href="/admin.html" class="btn-secondary btn-sm">Admin Panel</a>
                 </div>
             </div>
@@ -158,7 +159,7 @@
                             <select id="manualModel">
                                 <option value="google/gemma-3-27b-it:free">Gemma 3 27B (Free)</option>
                                 <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (Free)</option>
-                                <option value="qwen/qwen3-30b-a3b:free">Qwen3 30B (Free)</option>
+                                <option value="qwen/qwen-2.5-coder-32b-instruct:free">Qwen2.5 32B Coder (Free)</option>
                                 <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
                                 <option value="openai/gpt-4o">GPT-4o</option>
                             </select>
@@ -252,6 +253,15 @@
                                 <option value="8" selected>8</option>
                                 <option value="12">12</option>
                                 <option value="20">20</option>
+                            </select>
+                        </div>
+                        <div class="option-group">
+                            <label>Memory Strategy</label>
+                            <select id="wfMemoryStrategy" title="How agents manage memory across conversations">
+                                <option value="auto" selected>🤖 Automatic (AI decides)</option>
+                                <option value="shared">🔗 Shared (all agents share memory)</option>
+                                <option value="private">🔒 Private (isolated per agent)</option>
+                                <option value="hybrid">🔀 Hybrid (shared + private keys)</option>
                             </select>
                         </div>
                     </div>
@@ -436,8 +446,35 @@
                 <div class="loading-placeholder">Loading skills...</div>
             </div>
         </section>
+
+        <!-- Dashboard Section -->
+        <section class="section dashboard-section hidden" id="dashboardSection">
+            <div class="section-header">
+                <h2>📊 History Dashboard</h2>
+                <div class="section-header-actions">
+                    <button class="btn-secondary btn-sm" onclick="loadDashboard()">Refresh</button>
+                    <button class="btn-secondary btn-sm" onclick="toggleDashboard()">✕ Close</button>
+                </div>
+            </div>
+            <div class="dashboard-stats" id="dashboardStats">
+                <div class="stat-card">
+                    <span class="stat-value" id="statAgentsCount">0</span>
+                    <span class="stat-label">Agents Built</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-value" id="statWorkflowsCount">0</span>
+                    <span class="stat-label">Workflows</span>
+                </div>
+            </div>
+            <div class="dashboard-tabs">
+                <button class="dash-tab active" onclick="switchDashTab('agents')" id="dashTabAgents">🤖 Agents</button>
+                <button class="dash-tab" onclick="switchDashTab('workflows')" id="dashTabWorkflows">🔀 Workflows</button>
+            </div>
+            <div class="dashboard-list" id="dashAgentsList"></div>
+            <div class="dashboard-list hidden" id="dashWorkflowsList"></div>
+        </section>
     </main>
 
-    <script src="app.js?v=2"></script>
+    <script src="app.js?v=4"></script>
 </body>
 </html>

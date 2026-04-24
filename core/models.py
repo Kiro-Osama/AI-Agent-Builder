@@ -160,6 +160,7 @@ class Workflow(Base):
     error_log = Column(Text)
     sub_build_max_mcps = Column(Integer, nullable=True)
     sub_build_max_skills = Column(Integer, nullable=True)
+    memory_config = Column(JSONB, server_default=text("'{}'::jsonb"))  # workflow-level memory strategy
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -179,6 +180,7 @@ class Workflow(Base):
             "error_log": self.error_log,
             "sub_build_max_mcps": self.sub_build_max_mcps,
             "sub_build_max_skills": self.sub_build_max_skills,
+            "memory_config": self.memory_config,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -196,6 +198,7 @@ class WorkflowExecution(Base):
     execution_log = Column(JSONB, server_default=text("'[]'::jsonb"))
     current_agent = Column(String(100))
     status = Column(String(50), default="active")
+    memory_state = Column(JSONB, server_default=text("'{}'::jsonb"))  # persisted memory across sessions
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     def to_dict(self) -> dict:
@@ -207,5 +210,6 @@ class WorkflowExecution(Base):
             "execution_log": self.execution_log,
             "current_agent": self.current_agent,
             "status": self.status,
+            "memory_state": self.memory_state,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

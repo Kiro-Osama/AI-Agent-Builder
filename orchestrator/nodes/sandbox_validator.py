@@ -40,6 +40,7 @@ async def sandbox_validator(state: AgentBuilderState) -> dict:
             if result.get("success"):
                 logger.info(f"  ✅ Skill passed: {skill_id}")
                 skill["status"] = "active"
+                skill["similarity"] = 1.0  # Newly created skills are exactly for this task
                 validated_skills.append(skill)
             else:
                 error = result.get("error", "Unknown error")

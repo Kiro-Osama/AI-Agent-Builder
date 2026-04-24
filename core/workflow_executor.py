@@ -161,6 +161,20 @@ async def _run_single_agent(
     session.add_to_history(role, {"role": "user", "content": user_message})
     session.add_to_history(role, {"role": "assistant", "content": result.get("response", "")})
 
+    # ----- Memory Layer Integration -----
+    # Track turns and store response to memory
+    session.increment_turn(role)
+    response_text = result.get("response", "")
+    if response_text:
+        session.store_to_memory(role, f"{role}_last_output", response_text[:2000])
+
+    # Trigger summary compression if threshold hit
+    if session.should_summarize(role):
+        try:
+            await session.summarize_history(role)
+        except Exception as e:
+            logger.warning("[Workflow] Summary failed for %s: %s", role, e)
+
     return result
 
 

@@ -149,10 +149,27 @@ async def chat_with_agent(
 
     # Send to agent-engine Docker service
     selected_mcps = config.get("selected_mcps", [])
+    
+    system_prompt = config["system_prompt"]
+    
+    # Inform the agent about any local directories mounted to /user_dir
+    if request.mcp_configs:
+        for mcp_name, user_cfg in request.mcp_configs.items():
+            if "allowed_directory" in user_cfg and user_cfg["allowed_directory"].strip():
+                host_dir = user_cfg["allowed_directory"].strip()
+                system_prompt += (
+                    f"\n\n[System Note: The user's local directory '{host_dir}' has been securely mounted to '/user_dir'. "
+                    f"This is your PRIMARY working directory. If the user asks to list or organize files without specifying a path, ASSUME they mean '/user_dir'. "
+                    f"If the user provides a path starting with '{host_dir}' (or any subfolder), you MUST replace the '{host_dir}' part with '/user_dir'. For example, if they say '{host_dir}\\Notebooks', you MUST access '/user_dir/Notebooks'. DO NOT try to access the literal path '{host_dir}' directly! "
+                    f"CRITICAL: You have default tools (e.g. 'move_file', 'read_file') and MCP tools with the SAME names. "
+                    f"The default tools are strictly sandboxed to '/workspace' and will throw 'access denied - path outside allowed directories' if you try to use them on '/user_dir'. "
+                    f"If you receive this 'access denied' error, it means you accidentally used the default tool! You MUST retry using the MCP version of the tool, or if you can't distinguish them, write a Python script using the 'execute' tool to do file operations, or ask the user for clarification. "
+                    f"Even if the user says 'use ls tool', you should interpret that as 'use list_directory' on '/user_dir'."
+                )
 
     try:
         result = await execute_on_agent_engine(
-            system_prompt=config["system_prompt"],
+            system_prompt=system_prompt,
             user_message=request.message,
             history=history,
             skill_ids=config.get("selected_skills"),

@@ -839,6 +839,8 @@ async function submitWorkflowBuild() {
     const awaitChk = document.getElementById('wfAwaitPlanApproval');
     const wfMcpsEl = document.getElementById('wfSubBuildMaxMcps');
     const wfSkillsEl = document.getElementById('wfSubBuildMaxSkills');
+    const memStratEl = document.getElementById('wfMemoryStrategy');
+    const memoryHint = memStratEl ? memStratEl.value : 'auto';
     const payload = {
         query: query,
         topology_hint: document.getElementById('wfTopology').value || 'auto',
@@ -847,6 +849,7 @@ async function submitWorkflowBuild() {
         await_plan_approval: !!(awaitChk && awaitChk.checked),
         sub_build_max_mcps: wfMcpsEl ? parseInt(wfMcpsEl.value, 10) : 3,
         sub_build_max_skills: wfSkillsEl ? parseInt(wfSkillsEl.value, 10) : 8,
+        memory_strategy_hint: memoryHint !== 'auto' ? memoryHint : null,
     };
 
     try {
@@ -1064,6 +1067,19 @@ function showWorkflowResult(data) {
 
     const agents = data.agents || [];
     const config = data.workflow_config || {};
+    const memCfg = data.shared_state_schema || {}; // Note: API might send memory config differently. Let's pull from data object.
+    const memoryConfig = data.memory_config || config.memory_strategy || {};
+
+    let memoryHtml = '';
+    if (memoryConfig && memoryConfig.memory_type) {
+        memoryHtml = `
+            <div class="wf-result-meta-item">
+                <span class="wf-result-meta-label">Memory</span>
+                ${getMemoryBadge(memoryConfig.memory_type)}
+                <span style="font-size: 0.75rem; color: var(--text-secondary); margin-left: 6px;">(${escapeHtml(memoryConfig.backend || 'conversation')})</span>
+            </div>
+        `;
+    }
 
     document.getElementById('wfResultDetails').innerHTML = `
         <div class="wf-result-meta">
@@ -1075,6 +1091,7 @@ function showWorkflowResult(data) {
                 <span class="wf-result-meta-label">Topology</span>
                 <span class="wf-topology-badge topo-${data.topology}">${escapeHtml(data.topology)}</span>
             </div>
+            ${memoryHtml}
             <div class="wf-result-meta-item">
                 <span class="wf-result-meta-label">Agents</span>
                 <span class="wf-result-meta-value">${agents.length}</span>
@@ -1104,4 +1121,149 @@ function chatWithWorkflow() {
     } else {
         showToast('No workflow to chat with', 'error');
     }
+}
+
+// -----------------------------------------------
+// Dashboard
+// -----------------------------------------------
+let dashboardLoaded = false;
+
+function toggleDashboard() {
+    const dashSection = document.getElementById('dashboardSection');
+    const isHidden = dashSection.classList.contains('hidden');
+    
+    // Elements to toggle
+    const mainSections = [
+        'buildSection', 'mcpsSection', 'skillsSection', 
+        'pipelineSection', 'resultSection', 'wfPipelineSection', 'wfResultSection'
+    ];
+
+    if (isHidden) {
+        // Show dashboard, hide others
+        dashSection.classList.remove('hidden');
+        mainSections.forEach(id => {
+            const el = document.getElementById(id);
+            if (el && !el.classList.contains('hidden')) {
+                el.dataset.wasVisible = 'true';
+                el.classList.add('hidden');
+            } else if (el) {
+                el.dataset.wasVisible = 'false';
+            }
+        });
+        document.getElementById('dashboardToggle').innerHTML = '✕ Close Dashboard';
+        if (!dashboardLoaded) {
+            loadDashboard();
+        }
+    } else {
+        // Hide dashboard, restore others
+        dashSection.classList.add('hidden');
+        mainSections.forEach(id => {
+            const el = document.getElementById(id);
+            if (el && el.dataset.wasVisible === 'true') {
+                el.classList.remove('hidden');
+            }
+        });
+        // Always ensure build section is visible if nothing else is
+        document.getElementById('buildSection').classList.remove('hidden');
+        document.getElementById('mcpsSection').classList.remove('hidden');
+        document.getElementById('skillsSection').classList.remove('hidden');
+        
+        document.getElementById('dashboardToggle').innerHTML = '📊 Dashboard';
+    }
+}
+
+function switchDashTab(tab) {
+    document.getElementById('dashTabAgents').classList.toggle('active', tab === 'agents');
+    document.getElementById('dashTabWorkflows').classList.toggle('active', tab === 'workflows');
+    document.getElementById('dashAgentsList').classList.toggle('hidden', tab !== 'agents');
+    document.getElementById('dashWorkflowsList').classList.toggle('hidden', tab !== 'workflows');
+}
+
+async function loadDashboard() {
+    try {
+        const res = await fetch(`${API_BASE}/dashboard?limit=50`);
+        if (!res.ok) throw new Error('Failed to load dashboard');
+        const data = await res.json();
+        dashboardLoaded = true;
+
+        // Update stats
+        document.getElementById('statAgentsCount').textContent = data.totals.agents || 0;
+        document.getElementById('statWorkflowsCount').textContent = data.totals.workflows || 0;
+
+        // Render agents list
+        renderDashAgents(data.agents || []);
+
+        // Render workflows list
+        renderDashWorkflows(data.workflows || []);
+
+    } catch (e) {
+        console.error('Dashboard load error:', e);
+        showToast('Failed to load dashboard', 'error');
+    }
+}
+
+function getStatusBadge(status) {
+    const cls = `badge badge-${status || 'queued'}`;
+    return `<span class="${cls}">${escapeHtml(status || 'unknown')}</span>`;
+}
+
+function getMemoryBadge(type) {
+    if (!type) return '';
+    const icons = { shared: '🔗', private: '🔒', hybrid: '🔀' };
+    const cls = `badge badge-memory-${type}`;
+    return `<span class="${cls}">${icons[type] || ''} ${type}</span>`;
+}
+
+function formatDate(isoStr) {
+    if (!isoStr) return '';
+    try {
+        const d = new Date(isoStr);
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+               ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    } catch { return ''; }
+}
+
+function renderDashAgents(agents) {
+    const container = document.getElementById('dashAgentsList');
+    if (!agents.length) {
+        container.innerHTML = '<div class="dash-empty">No agents built yet. Use the build form above to create your first agent!</div>';
+        return;
+    }
+    container.innerHTML = agents.map(a => `
+        <div class="dash-item">
+            <div class="dash-item-icon">🤖</div>
+            <div class="dash-item-body">
+                <div class="dash-item-name">${escapeHtml(a.name)}</div>
+                <div class="dash-item-query">${escapeHtml(truncate(a.query, 80))}</div>
+            </div>
+            <div class="dash-item-meta">
+                ${getStatusBadge(a.status)}
+                ${a.model ? `<span class="badge badge-topology">${escapeHtml(truncate(a.model, 25))}</span>` : ''}
+                <span class="dash-item-date">${formatDate(a.created_at)}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderDashWorkflows(workflows) {
+    const container = document.getElementById('dashWorkflowsList');
+    if (!workflows.length) {
+        container.innerHTML = '<div class="dash-empty">No workflows built yet. Try the Workflow Build tab!</div>';
+        return;
+    }
+    container.innerHTML = workflows.map(w => `
+        <div class="dash-item">
+            <div class="dash-item-icon">🔀</div>
+            <div class="dash-item-body">
+                <div class="dash-item-name">${escapeHtml(w.name)}</div>
+                <div class="dash-item-query">${escapeHtml(truncate(w.query, 80))}</div>
+            </div>
+            <div class="dash-item-meta">
+                ${getStatusBadge(w.status)}
+                ${w.topology ? `<span class="badge badge-topology">${escapeHtml(w.topology)}</span>` : ''}
+                ${getMemoryBadge(w.memory_type)}
+                <span class="dash-item-date">${formatDate(w.created_at)}</span>
+            </div>
+        </div>
+    `).join('');
 }

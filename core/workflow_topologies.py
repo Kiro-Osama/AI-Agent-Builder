@@ -21,6 +21,65 @@ class TopologyType(str, Enum):
     SWARM = "swarm"
 
 
+class MemoryType(str, Enum):
+    """How memory is scoped across agents in a workflow."""
+    SHARED = "shared"       # All agents read/write one shared memory store
+    PRIVATE = "private"     # Each agent has its own isolated memory
+    HYBRID = "hybrid"       # Some keys shared, some private per-agent
+
+
+class MemoryBackend(str, Enum):
+    """How conversation history is stored / compressed."""
+    CONVERSATION = "conversation"   # Raw message history (default)
+    SUMMARY = "summary"             # LLM-summarized memory (compresses long histories)
+    KV_STORE = "kv_store"           # Structured key-value store (data extraction pipelines)
+
+
+@dataclass
+class MemoryConfig:
+    """Memory strategy configuration for a workflow or individual agent."""
+    memory_type: MemoryType = MemoryType.SHARED
+    backend: MemoryBackend = MemoryBackend.CONVERSATION
+    max_history_turns: int = 20
+    summary_interval: int = 10       # summarize every N turns when backend=summary
+    shared_memory_keys: list[str] = field(default_factory=list)
+    private_memory_keys: list[str] = field(default_factory=list)
+    reasoning: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "memory_type": self.memory_type.value,
+            "backend": self.backend.value,
+            "max_history_turns": self.max_history_turns,
+            "summary_interval": self.summary_interval,
+            "shared_memory_keys": self.shared_memory_keys,
+            "private_memory_keys": self.private_memory_keys,
+            "reasoning": self.reasoning,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> MemoryConfig:
+        if not d:
+            return cls()
+        try:
+            mt = MemoryType(d.get("memory_type", "shared"))
+        except ValueError:
+            mt = MemoryType.SHARED
+        try:
+            mb = MemoryBackend(d.get("backend", "conversation"))
+        except ValueError:
+            mb = MemoryBackend.CONVERSATION
+        return cls(
+            memory_type=mt,
+            backend=mb,
+            max_history_turns=int(d.get("max_history_turns", 20)),
+            summary_interval=int(d.get("summary_interval", 10)),
+            shared_memory_keys=list(d.get("shared_memory_keys") or []),
+            private_memory_keys=list(d.get("private_memory_keys") or []),
+            reasoning=str(d.get("reasoning", "")),
+        )
+
+
 @dataclass
 class AgentRole:
     role: str
@@ -35,9 +94,10 @@ class AgentRole:
     reads_from_shared_state: list[str] = field(default_factory=list)
     output_to_shared_state: list[str] = field(default_factory=list)
     result_template: dict | None = None
+    memory_override: MemoryConfig | None = None  # per-agent override of workflow default
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "role": self.role,
             "agent_name": self.agent_name,
             "sub_task": self.sub_task,
@@ -50,6 +110,9 @@ class AgentRole:
             "reads_from_shared_state": self.reads_from_shared_state,
             "output_to_shared_state": self.output_to_shared_state,
         }
+        if self.memory_override:
+            d["memory_override"] = self.memory_override.to_dict()
+        return d
 
 
 @dataclass
@@ -62,6 +125,7 @@ class WorkflowPlan:
     shared_state_schema: dict = field(default_factory=dict)
     routing_rules: dict = field(default_factory=dict)
     reasoning: str = ""
+    memory_strategy: MemoryConfig = field(default_factory=MemoryConfig)  # workflow-level default
 
     def to_dict(self) -> dict:
         return {
@@ -73,6 +137,7 @@ class WorkflowPlan:
             "shared_state_schema": self.shared_state_schema,
             "routing_rules": self.routing_rules,
             "reasoning": self.reasoning,
+            "memory_strategy": self.memory_strategy.to_dict(),
         }
 
 

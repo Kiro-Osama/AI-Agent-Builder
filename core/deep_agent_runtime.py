@@ -389,8 +389,19 @@ def _extract_response(result: dict) -> str:
             if msg[0] in ("assistant", "ai"):
                 content = msg[1]
 
-        if content and isinstance(content, str) and content.strip():
-            return content.strip()
+        if content:
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+            elif isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if isinstance(block, str):
+                        text_parts.append(block)
+                    elif isinstance(block, dict) and "text" in block:
+                        text_parts.append(block["text"])
+                extracted = "\n".join(text_parts).strip()
+                if extracted:
+                    return extracted
 
     return "(Agent returned no text response)"
 

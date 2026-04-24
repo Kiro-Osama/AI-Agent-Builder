@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from core.models import Workflow, BuildHistory
 from core.workflow_topologies import (
     AgentRole,
+    MemoryConfig,
     TopologyType,
     WorkflowPlan,
     get_supervisor_system_prompt,
@@ -102,6 +103,11 @@ def workflow_row_to_plan(wf: Workflow) -> WorkflowPlan:
         if sup:
             sup_cfg = {"supervisor_role": sup}
 
+    # Reconstruct memory strategy
+    mem_cfg = None
+    if isinstance(wf.memory_config, dict) and wf.memory_config:
+        mem_cfg = MemoryConfig.from_dict(wf.memory_config)
+
     return WorkflowPlan(
         workflow_name=wf.name or "Workflow",
         topology=topology,
@@ -111,6 +117,7 @@ def workflow_row_to_plan(wf: Workflow) -> WorkflowPlan:
         shared_state_schema=dict(wf.shared_state_schema or {}),
         routing_rules=dict(rc),
         reasoning=wf.description or "",
+        memory_strategy=mem_cfg or MemoryConfig(),
     )
 
 
@@ -380,6 +387,7 @@ def run_workflow_build(
         "agents": plan.to_dict()["agents"],
         "workflow_config": plan.routing_rules,
         "shared_state_schema": plan.shared_state_schema,
+        "memory_config": plan.memory_strategy.to_dict(),
     }
 
     if await_plan_approval:

@@ -14,6 +14,7 @@ from typing import Any
 from core.openrouter import openrouter_client
 from core.workflow_topologies import (
     AgentRole,
+    MemoryConfig,
     TopologyType,
     WorkflowPlan,
     build_routing_rules,
@@ -77,6 +78,39 @@ Respond with ONLY a JSON object (no markdown, no explanation):
   "reasoning": "Brief explanation of why this topology was chosen"
 }
 
+## Memory Strategy
+You must also decide the memory strategy for the workflow.
+
+### Memory Types
+- **shared**: All agents read/write a single shared memory (best for sequential pipelines where each agent builds on the previous output).
+- **private**: Each agent has its own isolated memory (best for parallel workers that don't need to see each other's internal state).
+- **hybrid**: Mix of shared keys (visible to all) and private keys (agent-specific). Best for supervisor/swarm where the supervisor needs visibility but workers keep internal notes.
+
+### Memory Backends
+- **conversation**: Keep raw message history (default, good for most workflows).
+- **summary**: Periodically compress conversation into summaries (good for long-running agents that accumulate many turns).
+- **kv_store**: Structured key-value extraction (good for data processing pipelines that produce structured outputs).
+
+Include in your JSON output:
+{
+  ...
+  "memory_strategy": {
+    "memory_type": "shared|private|hybrid",
+    "backend": "conversation|summary|kv_store",
+    "max_history_turns": 20,
+    "reasoning": "Why this memory configuration suits the workflow"
+  }
+}
+
+Agents may optionally include a "memory_override" object if they need a different config than the workflow default:
+{
+  ...
+  "memory_override": {
+    "backend": "summary",
+    "private_memory_keys": ["internal_notes"]
+  }
+}
+
 ## Rules
 1. Each agent must have a unique role ID (lowercase_snake_case).
 2. For supervisor topology, include the supervisor as the first agent.
@@ -85,6 +119,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
 5. Keep agent count between 2 and 6 for efficiency.
 6. The sub_task must be specific enough to build a focused single agent.
 7. needs_mcps and needs_skills are HINTS — the builder pipeline will find the best matches.
+8. Always include a memory_strategy block — choose the best memory type for the selected topology.
 """
 
 
@@ -160,8 +195,21 @@ async def plan_workflow(user_query: str, topology_hint: str | None = None) -> Wo
         )
         topology = TopologyType.SEQUENTIAL
 
+    # Parse workflow-level memory strategy
+    memory_strategy = MemoryConfig.from_dict(parsed.get("memory_strategy"))
+    logger.info(
+        "[WorkflowPlanner] Memory strategy: type=%s, backend=%s",
+        memory_strategy.memory_type.value,
+        memory_strategy.backend.value,
+    )
+
     agents: list[AgentRole] = []
     for a in parsed.get("agents", []):
+        # Parse optional per-agent memory override
+        agent_mem_override = None
+        if a.get("memory_override"):
+            agent_mem_override = MemoryConfig.from_dict(a["memory_override"])
+
         agents.append(
             AgentRole(
                 role=a.get("role", "agent"),
@@ -172,6 +220,7 @@ async def plan_workflow(user_query: str, topology_hint: str | None = None) -> Wo
                 depends_on=a.get("depends_on", []),
                 reads_from_shared_state=a.get("reads_from_shared_state", []),
                 output_to_shared_state=a.get("output_to_shared_state", []),
+                memory_override=agent_mem_override,
             )
         )
 
@@ -207,6 +256,7 @@ async def plan_workflow(user_query: str, topology_hint: str | None = None) -> Wo
         shared_state_schema=shared_schema,
         routing_rules=routing_rules,
         reasoning=parsed.get("reasoning", ""),
+        memory_strategy=memory_strategy,
     )
 
     logger.info(

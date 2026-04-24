@@ -14,6 +14,6 @@ class BuildRequest(BaseModel):
         None,
         description="LLM backend: openrouter, ollama (local), or ollama_remote (OLLAMA_REMOTE_BASE_URL).",
     )
-    max_mcps: int = Field(5, ge=1, le=10, description="Max number of MCPs to select")
-    max_skills: int = Field(8, ge=1, le=20, description="Max skills to retrieve from catalog for this build")
+    max_mcps: int = Field(5, ge=0, le=10, description="Max number of MCPs to select")
+    max_skills: int = Field(8, ge=0, le=20, description="Max skills to retrieve from catalog for this build")
     enable_skill_creation: bool = Field(True, description="Allow dynamic skill creation")

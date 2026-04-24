@@ -19,7 +19,7 @@ apply_langsmith_env(
     langchain_endpoint=settings.langchain_endpoint or None,
 )
 
-from api.routers import build, status, templates, chat, embeddings, skills_seed, admin, manual_build, workflow
+from api.routers import build, status, templates, chat, embeddings, skills_seed, admin, manual_build, workflow, dashboard
 
 # -----------------------------------------------
 # Logging setup
@@ -111,6 +111,7 @@ app.include_router(skills_seed.router, prefix="/api/v1", tags=["Skills Seed"])
 app.include_router(admin.router, prefix="/api/v1", tags=["Admin"])
 app.include_router(manual_build.router, prefix="/api/v1", tags=["Manual Build"])
 app.include_router(workflow.router, prefix="/api/v1", tags=["Workflows"])
+app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 
 
 # -----------------------------------------------

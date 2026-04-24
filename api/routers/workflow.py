@@ -60,8 +60,8 @@ class WorkflowBuildRequest(BaseModel):
     llm_provider: LlmProvider | None = None
     # When True: planner runs, then status awaits POST .../plan/decision before sub-builds.
     await_plan_approval: bool = False
-    sub_build_max_mcps: int = Field(3, ge=1, le=10, description="Max MCPs per sub-agent build")
-    sub_build_max_skills: int = Field(8, ge=1, le=20, description="Max skills retrieved per sub-agent build")
+    sub_build_max_mcps: int = Field(3, ge=0, le=10, description="Max MCPs per sub-agent build")
+    sub_build_max_skills: int = Field(8, ge=0, le=20, description="Max skills retrieved per sub-agent build")
 
 
 class WorkflowPlanDecisionRequest(BaseModel):
