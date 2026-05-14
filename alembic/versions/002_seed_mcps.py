@@ -144,17 +144,19 @@ ON CONFLICT (mcp_name) DO UPDATE SET
     )
     op.execute(
         """
-INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config)
+INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config, requires_user_config, config_schema)
 VALUES (
     'mcp-notion',
     'mcp/notion:latest',
     'Official Notion MCP Server. Connects AI agents to Notion workspaces for reading, creating, and managing pages, databases, and blocks. Perfect for project management, documentation, and task tracking.',
     '[
-        {"name": "search", "description": "Search across all Notion pages and databases."},
-        {"name": "get_page", "description": "Retrieve a specific Notion page by ID."},
-        {"name": "create_page", "description": "Create a new Notion page in a workspace or database."},
-        {"name": "update_page", "description": "Update properties or content of an existing page."},
-        {"name": "query_database", "description": "Query a Notion database with filters and sorts."}
+        {"name": "API-get-self", "description": "Retrieve your token bot user info."},
+        {"name": "API-post-search", "description": "Search across all Notion pages and databases."},
+        {"name": "API-retrieve-a-page", "description": "Retrieve a specific Notion page by ID."},
+        {"name": "API-post-page", "description": "Create a new Notion page in a workspace or database."},
+        {"name": "API-patch-page", "description": "Update properties or content of an existing page."},
+        {"name": "API-retrieve-a-database", "description": "Retrieve a Notion database by ID."},
+        {"name": "API-post-database-query", "description": "Query a Notion database with filters and sorts."}
     ]'::jsonb,
     'communication',
     '{
@@ -162,21 +164,25 @@ VALUES (
         "stdin_open": true,
         "command": [],
         "volumes": {},
-        "environment": {"NOTION_API_KEY": "REQUIRED"},
-        "notes": "Requires NOTION_API_KEY environment variable. Get it from https://www.notion.so/my-integrations"
-    }'::jsonb
+        "environment": {"NOTION_TOKEN": "REQUIRED"},
+        "notes": "Requires NOTION_TOKEN environment variable. Get your integration token from https://www.notion.so/my-integrations"
+    }'::jsonb,
+    true,
+    '[{"key": "NOTION_TOKEN", "label": "Notion Integration Token", "secret": true, "required": true, "description": "Get from notion.so/my-integrations"}]'::jsonb
 )
 ON CONFLICT (mcp_name) DO UPDATE SET
     docker_image = EXCLUDED.docker_image,
     description = EXCLUDED.description,
     tools_provided = EXCLUDED.tools_provided,
     category = EXCLUDED.category,
-    run_config = EXCLUDED.run_config;
+    run_config = EXCLUDED.run_config,
+    requires_user_config = EXCLUDED.requires_user_config,
+    config_schema = EXCLUDED.config_schema;
 """
     )
     op.execute(
         """
-INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config)
+INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config, requires_user_config, config_schema)
 VALUES (
     'mcp-slack',
     'mcp/slack:latest',
@@ -195,19 +201,26 @@ VALUES (
         "volumes": {},
         "environment": {"SLACK_BOT_TOKEN": "REQUIRED", "SLACK_TEAM_ID": "REQUIRED"},
         "notes": "Requires SLACK_BOT_TOKEN and SLACK_TEAM_ID. Create a Slack app at https://api.slack.com/apps"
-    }'::jsonb
+    }'::jsonb,
+    true,
+    '[
+        {"key": "SLACK_BOT_TOKEN", "label": "Slack Bot Token", "secret": true, "required": true, "description": "Starts with xoxb-. From api.slack.com/apps > OAuth & Permissions"},
+        {"key": "SLACK_TEAM_ID", "label": "Slack Team ID", "secret": false, "required": true, "description": "Your workspace ID (e.g. T01XXXXXX). Found in Slack workspace URL."}
+    ]'::jsonb
 )
 ON CONFLICT (mcp_name) DO UPDATE SET
     docker_image = EXCLUDED.docker_image,
     description = EXCLUDED.description,
     tools_provided = EXCLUDED.tools_provided,
     category = EXCLUDED.category,
-    run_config = EXCLUDED.run_config;
+    run_config = EXCLUDED.run_config,
+    requires_user_config = EXCLUDED.requires_user_config,
+    config_schema = EXCLUDED.config_schema;
 """
     )
     op.execute(
         """
-INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config)
+INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config, requires_user_config, config_schema)
 VALUES (
     'mcp-gitlab',
     'mcp/gitlab:latest',
@@ -227,14 +240,21 @@ VALUES (
         "volumes": {},
         "environment": {"GITLAB_PERSONAL_ACCESS_TOKEN": "REQUIRED", "GITLAB_API_URL": "https://gitlab.com/api/v4"},
         "notes": "Requires GITLAB_PERSONAL_ACCESS_TOKEN. Generate from GitLab > Settings > Access Tokens."
-    }'::jsonb
+    }'::jsonb,
+    true,
+    '[
+        {"key": "GITLAB_PERSONAL_ACCESS_TOKEN", "label": "GitLab Personal Access Token", "secret": true, "required": true, "description": "Generate from GitLab > Settings > Access Tokens (read_api, read_repository scopes)"},
+        {"key": "GITLAB_API_URL", "label": "GitLab API URL", "secret": false, "required": false, "description": "Default: https://gitlab.com/api/v4 (change for self-hosted)"}
+    ]'::jsonb
 )
 ON CONFLICT (mcp_name) DO UPDATE SET
     docker_image = EXCLUDED.docker_image,
     description = EXCLUDED.description,
     tools_provided = EXCLUDED.tools_provided,
     category = EXCLUDED.category,
-    run_config = EXCLUDED.run_config;
+    run_config = EXCLUDED.run_config,
+    requires_user_config = EXCLUDED.requires_user_config,
+    config_schema = EXCLUDED.config_schema;
 """
     )
 
