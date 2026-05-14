@@ -1730,3 +1730,66 @@ select option {
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
 }
+
+/* ─────────────────────────────────────────────
+   Import / Export
+───────────────────────────────────────────── */
+.import-section { margin-top: 0; }
+.import-section .subtitle { color: var(--text-secondary); }
+
+.import-dropzone {
+    margin-top: 16px;
+    padding: 36px 24px;
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-glass);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    text-align: center;
+    transition: border-color 0.2s, background 0.2s;
+    cursor: default;
+}
+.import-dropzone.drag-over {
+    border-color: var(--accent-blue);
+    background: rgba(99,102,241,0.06);
+}
+.import-drop-icon { font-size: 2.2rem; line-height: 1; }
+.import-drop-label { margin: 0; font-size: 0.9rem; color: var(--text-secondary); }
+.import-drop-label code {
+    background: rgba(255,255,255,0.07);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.82rem;
+}
+.import-drop-or { margin: 0; font-size: 0.8rem; color: var(--text-muted); }
+
+.import-result {
+    margin-top: 16px;
+    padding: 20px 24px;
+    border-radius: var(--radius-sm);
+    background: rgba(16,185,129,0.06);
+    border: 1px solid rgba(16,185,129,0.25);
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+}
+.import-result-icon { font-size: 2rem; flex-shrink: 0; }
+.import-result-body { flex: 1; min-width: 160px; }
+.import-result-name {
+    margin: 0 0 4px;
+    font-weight: 600;
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+.import-result-type {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+}
+.import-result-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+@keyframes spin { to { transform: rotate(360deg); } }

@@ -78,25 +78,44 @@ def _resolve_skills_dir() -> str:
 # -----------------------------------------------
 # LLM Factory — Gemini primary, OpenRouter/Ollama fallback
 # -----------------------------------------------
+def _is_openrouter_model(model: str) -> bool:
+    """
+    Return True if the model string looks like an OpenRouter model ID (e.g. "meta-llama/llama-3.1-8b-instruct:free").
+    OpenRouter IDs always contain "/" and are NOT native Gemini model names.
+    Gemini models start with "gemini-" or "models/gemini".
+    """
+    if model.startswith("gemini") or model.startswith("models/gemini"):
+        return False
+    return "/" in model
+
+
+# Canonical safe fallback models per provider
+_GEMINI_SAFE_MODEL = os.getenv("DEEPAGENT_MODEL", "gemini-2.0-flash-lite")
+_OPENROUTER_SAFE_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
+
+
 def create_llm(model: str | None = None, temperature: float | None = None):
     """
     Create a LangChain-compatible LLM instance.
 
-    Priority:
-        1. If model starts with "ollama:" → use Ollama via ChatOpenAI
-        2. If GOOGLE_API_KEY is set → use ChatGoogleGenerativeAI (Gemini)
-        3. Fallback → use ChatOpenAI pointed at OpenRouter
+    Routing priority:
+        1. "ollama:tag"  → Ollama (local or remote)
+        2. GOOGLE_API_KEY present AND model is NOT an OpenRouter-style ID
+           → ChatGoogleGenerativeAI (Gemini).  If model looks like an OpenRouter
+             name (contains "/"), we silently substitute DEEPAGENT_MODEL so we
+             never feed an OpenRouter slug to the Gemini API.
+        3. OPENROUTER_API_KEY present → ChatOpenAI → OpenRouter
+        4. Neither → RuntimeError
     """
     effective_model = model or DEEPAGENT_MODEL
     effective_temp = temperature if temperature is not None else DEEPAGENT_TEMPERATURE
 
-    # --- Ollama route ---
+    # ── Ollama route ──────────────────────────────────────────────────────────
     if effective_model.startswith("ollama:"):
         from langchain_openai import ChatOpenAI
 
         ollama_tag = effective_model.split(":", 1)[1]
         ollama_base = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-
         logger.info("[DeepAgent] Using Ollama: %s @ %s", ollama_tag, ollama_base)
         return ChatOpenAI(
             model=ollama_tag,
@@ -105,9 +124,19 @@ def create_llm(model: str | None = None, temperature: float | None = None):
             temperature=effective_temp,
         )
 
-    # --- Gemini route (primary) ---
+    # ── Gemini route (primary) ────────────────────────────────────────────────
     if GOOGLE_API_KEY:
         from langchain_google_genai import ChatGoogleGenerativeAI
+
+        # If the stored model is an OpenRouter slug (e.g. "anthropic/claude-3.5-sonnet"),
+        # it's invalid for the Gemini API — fall back to our default Gemini model.
+        if _is_openrouter_model(effective_model):
+            logger.warning(
+                "[DeepAgent] Model '%s' looks like an OpenRouter slug — substituting '%s' for Gemini",
+                effective_model,
+                _GEMINI_SAFE_MODEL,
+            )
+            effective_model = _GEMINI_SAFE_MODEL
 
         logger.info("[DeepAgent] Using Gemini: %s", effective_model)
         return ChatGoogleGenerativeAI(
@@ -116,13 +145,22 @@ def create_llm(model: str | None = None, temperature: float | None = None):
             google_api_key=GOOGLE_API_KEY,
         )
 
-    # --- OpenRouter fallback ---
+    # ── OpenRouter fallback ──────────────────────────────────────────────────
     openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if openrouter_key:
         from langchain_openai import ChatOpenAI
 
         openrouter_base = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-        logger.info("[DeepAgent] Using OpenRouter fallback: %s", effective_model)
+        # Sanitize: if the model is not an OpenRouter-style slug, swap to a known safe one
+        if not _is_openrouter_model(effective_model) and not effective_model.startswith("ollama:"):
+            logger.warning(
+                "[DeepAgent] Model '%s' not an OpenRouter slug — substituting '%s'",
+                effective_model,
+                _OPENROUTER_SAFE_MODEL,
+            )
+            effective_model = _OPENROUTER_SAFE_MODEL
+
+        logger.info("[DeepAgent] Using OpenRouter: %s", effective_model)
         return ChatOpenAI(
             model=effective_model,
             base_url=openrouter_base,
@@ -189,6 +227,7 @@ async def run_deep_agent(
     skill_ids: list[str] | None = None,
     model: str | None = None,
     workspace_dir: str | None = None,
+    images: list[dict] | None = None,
 ) -> dict[str, Any]:
     """
     Execute a user request using DeepAgents with progressive skill disclosure.
@@ -264,13 +303,28 @@ async def run_deep_agent(
         role = msg.get("role", "user")
         content = msg.get("content", "")
         if role in ("user", "human"):
-            messages.append(("user", content))
+            # content may be a multimodal list (previous vision turns)
+            if isinstance(content, list):
+                messages.append(("user", content))
+            else:
+                messages.append(("user", content))
         elif role in ("assistant", "ai"):
-            messages.append(("assistant", content))
+            messages.append(("assistant", content if isinstance(content, str) else str(content)))
         # Skip system/tool messages — system_prompt is already injected
 
-    # Add current user message
-    messages.append(("user", user_message))
+    # Add current user message (multimodal if images attached)
+    if images:
+        multimodal_content: list = [{"type": "text", "text": user_message}]
+        for img in images:
+            multimodal_content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{img.get('media_type', 'image/jpeg')};base64,{img['data']}",
+                },
+            })
+        messages.append(("user", multimodal_content))
+    else:
+        messages.append(("user", user_message))
 
     # 5. Execute agent
     tool_calls_log: list[dict] = []

@@ -47,12 +47,19 @@ def _session_key(task_id: str, conversation_id: str) -> str:
     return f"{task_id}:{conversation_id}"
 
 
+class ImageAttachment(BaseModel):
+    """Base64-encoded image with MIME type."""
+    data: str           # raw base64, no data-URI prefix
+    media_type: str = "image/jpeg"  # image/jpeg | image/png | image/webp | image/gif
+
+
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
     model: str | None = None
     mcp_configs: dict[str, dict] | None = None  # {mcp_name: {KEY: value}}
     llm_provider: LlmProvider | None = None
+    images: list[ImageAttachment] | None = None  # vision — multimodal turns
 
 
 class ToolCallInfo(BaseModel):
@@ -167,6 +174,15 @@ async def chat_with_agent(
                     f"Even if the user says 'use ls tool', you should interpret that as 'use list_directory' on '/user_dir'."
                 )
 
+    # Build multimodal content if images are attached
+    images_payload = None
+    if request.images:
+        images_payload = [
+            {"data": img.data, "media_type": img.media_type}
+            for img in request.images
+        ]
+        logger.info("[Chat] %d image(s) attached to this turn", len(images_payload))
+
     try:
         result = await execute_on_agent_engine(
             system_prompt=system_prompt,
@@ -176,12 +192,22 @@ async def chat_with_agent(
             mcp_configs=selected_mcps,
             mcp_user_configs=request.mcp_configs,
             model=model,
+            images=images_payload,
         )
 
         response_text = result["response"]
 
-        # Update conversation history
-        history.append({"role": "user", "content": request.message})
+        # Store user turn in history (multimodal format when images present)
+        if images_payload:
+            user_content: list = [{"type": "text", "text": request.message}]
+            for img in images_payload:
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{img['media_type']};base64,{img['data']}"},
+                })
+            history.append({"role": "user", "content": user_content})
+        else:
+            history.append({"role": "user", "content": request.message})
         history.append({"role": "assistant", "content": response_text})
 
         return ChatResponse(

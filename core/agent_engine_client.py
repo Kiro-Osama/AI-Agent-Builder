@@ -27,6 +27,7 @@ async def execute_on_agent_engine(
     mcp_configs: list[dict] | None = None,
     mcp_user_configs: dict[str, dict] | None = None,
     model: str | None = None,
+    images: list[dict] | None = None,
 ) -> dict:
     """
     Send an execution request to the agent-engine Docker service.
@@ -57,6 +58,7 @@ async def execute_on_agent_engine(
         "mcp_configs": mcp_configs or [],
         "mcp_user_configs": mcp_user_configs,
         "model": model,
+        "images": images or [],
     }
 
     url = f"{AGENT_ENGINE_URL}/execute"

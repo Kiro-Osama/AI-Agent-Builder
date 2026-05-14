@@ -11,11 +11,16 @@ and MCP tool integration.
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Any
 
-from core.deep_agent_runtime import run_deep_agent
-from core.mcp_adapter import load_mcp_tools_for_agent
+from core.agent_engine_client import execute_on_agent_engine
+from core.ollama_client import (
+    get_llm_provider_override,
+    default_ollama_model_tag,
+    default_remote_model_tag,
+)
 from core.workflow_session import WorkflowSession
 from core.workflow_topologies import TopologyType, get_swarm_handoff_instructions
 
@@ -96,6 +101,36 @@ def _normalize_key(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
 
 
+def _resolve_agent_model(stored_model: str) -> str:
+    """
+    Resolve the model to use for this agent turn.
+
+    Priority:
+      1. UI provider override (gemini / ollama / ollama_remote) set via use_llm_provider()
+      2. Stored per-agent model from build config (may be an OpenRouter slug)
+      3. Empty string → let create_llm fall back to its own defaults
+
+    This ensures the chat-page provider selector actually overrides the model
+    that was baked in at build time (e.g. "anthropic/claude-3.5-sonnet").
+    """
+    provider = get_llm_provider_override()
+
+    if provider == "ollama":
+        tag = default_ollama_model_tag()
+        return f"ollama:{tag}"
+
+    if provider == "ollama_remote":
+        tag = default_remote_model_tag()
+        return f"ollama:{tag}"
+
+    if provider == "gemini":
+        # Return empty so create_llm picks up GOOGLE_API_KEY + DEEPAGENT_MODEL
+        return ""
+
+    # openrouter or None — honour the stored model (invalid slugs handled by create_llm)
+    return stored_model or ""
+
+
 def _resolve_workflow_role(session: WorkflowSession, raw: str) -> str | None:
     """
     Map LLM output (handoff_to / delegate_to) to a canonical role key in agent_configs.
@@ -125,7 +160,7 @@ async def _run_single_agent(
     user_message: str,
     extra_context: str = "",
 ) -> dict:
-    """Run one agent's DeepAgent loop and return the result dict."""
+    """Run one agent via the agent-engine service and return the result dict."""
     config = session.get_agent_config(role)
     if not config:
         return {"response": f"Error: No config for agent '{role}'", "tool_calls": [], "model": "", "iterations": 0}
@@ -134,27 +169,18 @@ async def _run_single_agent(
     if extra_context:
         system_prompt += f"\n\n{extra_context}"
 
-    model = config.get("model", "")
+    model = _resolve_agent_model(config.get("model", ""))
     history = session.get_history(role)
-
-    # Load MCP tools for this agent if it has any
-    mcp_tools = None
     selected_mcps = config.get("selected_mcps", [])
-    if selected_mcps:
-        try:
-            mcp_tools = await load_mcp_tools_for_agent(selected_mcps)
-        except Exception as e:
-            logger.warning("[Workflow] MCP tool loading failed for %s: %s", role, e)
+    skill_ids = config.get("selected_skills", []) or None
 
-    # Get skill IDs for this agent
-    skill_ids = config.get("selected_skills", [])
-
-    result = await run_deep_agent(
+    result = await execute_on_agent_engine(
         system_prompt=system_prompt,
         user_message=user_message,
         history=history,
-        mcp_tools=mcp_tools,
-        skill_ids=skill_ids if skill_ids else None,
+        skill_ids=skill_ids,
+        mcp_configs=selected_mcps,
+        mcp_user_configs=session.mcp_user_configs or None,
         model=model or None,
     )
 

@@ -307,6 +307,7 @@
                 <h2>🎉 Workflow Ready</h2>
                 <div class="result-actions">
                     <button class="btn-primary" onclick="chatWithWorkflow()" style="background:var(--accent-gradient);border:none;padding:8px 20px;border-radius:8px;color:white;cursor:pointer;font-family:'Inter',sans-serif;font-size:14px;font-weight:600;">💬 Chat with Workflow</button>
+                    <button class="btn-secondary" onclick="downloadWorkflowJson()">⬇️ Download JSON</button>
                     <button class="btn-secondary" onclick="newBuild()">🔄 New Build</button>
                 </div>
             </div>
@@ -408,11 +409,38 @@
                 <div class="result-actions">
                     <button class="btn-primary" onclick="chatWithAgent()" style="background: var(--accent-gradient); border: none; padding: 8px 20px; border-radius: 8px; color: white; cursor: pointer; font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 600;">💬 Chat with Agent</button>
                     <button class="btn-secondary" onclick="copyTemplate()">📋 Copy JSON</button>
+                    <button class="btn-secondary" onclick="downloadAgentJson()">⬇️ Download JSON</button>
                     <button class="btn-secondary" onclick="newBuild()">🔄 New Build</button>
                 </div>
             </div>
             <div class="template-viewer">
                 <pre><code id="templateOutput"></code></pre>
+            </div>
+        </section>
+
+        <!-- Import JSON Section -->
+        <section class="section import-section" id="importSection">
+            <div class="section-header">
+                <h2>📥 Import Agent / Workflow</h2>
+                <p class="subtitle" style="margin:0;font-size:0.84rem;">Upload a JSON file exported from this system to recreate the same agent or workflow.</p>
+            </div>
+            <div class="import-dropzone" id="importDropzone">
+                <input type="file" id="importFileInput" accept=".json" style="display:none" onchange="handleImportFile(this.files[0])">
+                <div class="import-drop-icon">📁</div>
+                <p class="import-drop-label">Drag &amp; drop an exported <code>.json</code> file here</p>
+                <p class="import-drop-or">— or —</p>
+                <button type="button" class="btn-secondary" onclick="document.getElementById('importFileInput').click()">Choose file</button>
+            </div>
+            <div class="import-result hidden" id="importResult">
+                <div class="import-result-icon" id="importResultIcon">✅</div>
+                <div class="import-result-body">
+                    <p class="import-result-name" id="importResultName"></p>
+                    <p class="import-result-type" id="importResultType"></p>
+                </div>
+                <div class="import-result-actions">
+                    <button type="button" class="btn-primary" id="importChatBtn" onclick="openImportChat()">💬 Open Chat</button>
+                    <button type="button" class="btn-secondary" onclick="resetImport()">Import another</button>
+                </div>
             </div>
         </section>
 

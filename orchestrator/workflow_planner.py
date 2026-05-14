@@ -24,7 +24,7 @@ from core.workflow_topologies import (
 logger = logging.getLogger(__name__)
 
 PLANNER_MODEL = os.getenv(
-    "WORKFLOW_PLANNER_MODEL", "google/gemma-4-26b-a4b-it:free"
+    "WORKFLOW_PLANNER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"
 )
 
 PLANNER_SYSTEM_PROMPT = """\

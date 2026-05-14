@@ -73,24 +73,24 @@ async def gemini_chat_completion(
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_API_KEY_BACKUP = os.getenv("OPENROUTER_API_KEY_BACKUP", "")
-DEFAULT_CHAT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "google/gemma-4-26b-a4b-it:free")
+DEFAULT_CHAT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
 
 # All available API keys (primary + backup) for rotation on 429
 _API_KEYS: list[str] = [k for k in [OPENROUTER_API_KEY, OPENROUTER_API_KEY_BACKUP] if k]
 
 # Ordered fallback chain: if the primary model fails (429/400), try the next one.
-# Cheap paid models at the end ensure we never fully stall when free daily limits hit.
+# Only verified, stable OpenRouter free models — no experimental/unreleased slugs.
 FREE_MODEL_CHAIN: list[str] = [
-    "google/gemma-4-26b-a4b-it:free",
-    "google/gemma-4-31b-it:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
     "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen-2.5-coder-32b-instruct:free",
+    "deepseek/deepseek-r1:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
     "google/gemma-3-27b-it:free",
 ]
 PAID_FALLBACK_CHAIN: list[str] = [
-    "google/gemini-2.0-flash-lite-001",
-    "google/gemma-3-4b-it",
-    "meta-llama/llama-3.2-3b-instruct",
+    "google/gemini-2.0-flash-001",
+    "openai/gpt-4o-mini",
+    "anthropic/claude-3-haiku",
 ]
 
 # -----------------------------------------------
@@ -99,11 +99,11 @@ PAID_FALLBACK_CHAIN: list[str] = [
 MODEL_TIERS = {
     "simple": os.getenv(
         "OPENROUTER_MODEL_SIMPLE",
-        "meta-llama/llama-3.3-70b-instruct:free",
+        "meta-llama/llama-3.1-8b-instruct:free",
     ),
-    "medium": os.getenv("OPENROUTER_MODEL_MEDIUM", "google/gemma-4-26b-a4b-it:free"),
-    "complex": os.getenv("OPENROUTER_MODEL_COMPLEX", "qwen/qwen3-next-80b-a3b-instruct:free"),
-    "creative": os.getenv("OPENROUTER_MODEL_CREATIVE", "google/gemma-4-31b-it:free"),
+    "medium": os.getenv("OPENROUTER_MODEL_MEDIUM", "qwen/qwen-2.5-coder-32b-instruct:free"),
+    "complex": os.getenv("OPENROUTER_MODEL_COMPLEX", "meta-llama/llama-3.3-70b-instruct:free"),
+    "creative": os.getenv("OPENROUTER_MODEL_CREATIVE", "deepseek/deepseek-r1:free"),
 }
 
 # Retry settings

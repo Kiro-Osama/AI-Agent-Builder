@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
         wflp.addEventListener('change', syncWfProviderUi);
         syncWfProviderUi();
     }
+    _setupImportDragDrop();
 });
 
 const openrouterOptions = `
@@ -814,6 +815,98 @@ function escapeHtml(str) {
 function truncate(str, len) {
     if (!str) return '';
     return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+// -----------------------------------------------
+// Export helpers
+// -----------------------------------------------
+function downloadAgentJson() {
+    if (!currentTaskId) { showToast('No agent to export', 'error'); return; }
+    window.location.href = `${API_BASE}/export/agent/${currentTaskId}`;
+}
+
+function downloadWorkflowJson() {
+    if (!currentWorkflowId) { showToast('No workflow to export', 'error'); return; }
+    window.location.href = `${API_BASE}/export/workflow/${currentWorkflowId}`;
+}
+
+// -----------------------------------------------
+// Import helpers
+// -----------------------------------------------
+let _importChatUrl = null;
+
+function resetImport() {
+    document.getElementById('importResult').classList.add('hidden');
+    document.getElementById('importDropzone').classList.remove('hidden');
+    document.getElementById('importFileInput').value = '';
+    _importChatUrl = null;
+}
+
+function openImportChat() {
+    if (_importChatUrl) window.open(_importChatUrl, '_blank');
+}
+
+function handleImportFile(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.json')) {
+        showToast('Only .json files are accepted', 'error');
+        return;
+    }
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+
+    const dropzone = document.getElementById('importDropzone');
+    dropzone.innerHTML = '<div class="import-drop-icon" style="animation:spin 1s linear infinite">⏳</div><p class="import-drop-label">Importing…</p>';
+
+    fetch(`${API_BASE}/import`, { method: 'POST', body: formData })
+        .then(async (res) => {
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `Server error ${res.status}`);
+            }
+            return res.json();
+        })
+        .then((data) => {
+            _importChatUrl = data.chat_url;
+            const typeLabel = data.import_type === 'workflow'
+                ? `Workflow imported · ID: ${data.workflow_id}`
+                : `Agent imported · ID: ${data.task_id}`;
+            document.getElementById('importResultName').textContent = data.name || 'Imported';
+            document.getElementById('importResultType').textContent = typeLabel;
+            const resultEl = document.getElementById('importResult');
+            resultEl.classList.remove('hidden');
+            // Reset dropzone content
+            dropzone.innerHTML = `
+                <input type="file" id="importFileInput" accept=".json" style="display:none" onchange="handleImportFile(this.files[0])">
+                <div class="import-drop-icon">📁</div>
+                <p class="import-drop-label">Drag &amp; drop an exported <code>.json</code> file here</p>
+                <p class="import-drop-or">— or —</p>
+                <button type="button" class="btn-secondary" onclick="document.getElementById('importFileInput').click()">Choose file</button>`;
+            dropzone.classList.add('hidden');
+            showToast(`Imported: ${data.name}`, 'success');
+        })
+        .catch((e) => {
+            dropzone.innerHTML = `
+                <input type="file" id="importFileInput" accept=".json" style="display:none" onchange="handleImportFile(this.files[0])">
+                <div class="import-drop-icon">📁</div>
+                <p class="import-drop-label">Drag &amp; drop an exported <code>.json</code> file here</p>
+                <p class="import-drop-or">— or —</p>
+                <button type="button" class="btn-secondary" onclick="document.getElementById('importFileInput').click()">Choose file</button>`;
+            showToast(`Import failed: ${e.message}`, 'error');
+        });
+}
+
+function _setupImportDragDrop() {
+    const zone = document.getElementById('importDropzone');
+    if (!zone) return;
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        zone.classList.remove('drag-over');
+        const file = e.dataTransfer?.files?.[0];
+        if (file) handleImportFile(file);
+    });
 }
 
 // -----------------------------------------------

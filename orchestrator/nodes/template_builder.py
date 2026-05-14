@@ -25,10 +25,11 @@ Skills available (knowledge overlays injected into the agent):
 Rules:
 - Build exactly ONE agent that covers the ENTIRE task.
 - agent_name: short descriptive name (e.g. "GitHub_Monitor", "Data_Analyst").
-- assigned_openrouter_model: pick based on task complexity:
-  simple tasks → "meta-llama/llama-3.1-8b-instruct:free"
-  medium tasks → "google/gemma-4-26b-a4b-it:free"
-  complex tasks → "anthropic/claude-3.5-sonnet"
+- assigned_openrouter_model: pick ONE of these verified models based on task complexity:
+  simple/fast tasks  → "meta-llama/llama-3.1-8b-instruct:free"
+  medium tasks       → "qwen/qwen-2.5-coder-32b-instruct:free"
+  complex tasks      → "deepseek/deepseek-r1:free"
+  (Do NOT invent model names — use ONLY the three options above)
 - selected_mcps: include ONLY MCPs whose tools are directly needed. Use the "name" field from the list above.
 - selected_skills: include ALL skill_ids that are relevant to ANY part of the task.
 - system_prompt: 3-6 sentences. Describe the agent's role, what tools it has, when to use each tool, and how to approach the task step by step. Be specific — mention tool names and skill capabilities.
@@ -127,7 +128,7 @@ async def template_builder(state: AgentBuilderState) -> dict:
         logger.error(f"Template builder failed: {e}")
         # Build a fallback template using FREE model
         import os
-        default_model = preferred_model or os.getenv("DEFAULT_CHAT_MODEL", "openrouter/free")
+        default_model = preferred_model or os.getenv("DEFAULT_CHAT_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
         
         # Build full MCP entries for the fallback
         all_mcps = running_mcps + selected_tools.get("mcps", [])

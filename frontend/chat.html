@@ -228,6 +228,59 @@
         }
         .btn-send:hover { transform: scale(1.05); box-shadow: 0 0 20px rgba(124, 58, 237, 0.4); }
         .btn-send:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        /* Image attachment button */
+        .btn-attach {
+            width: 42px; height: 42px; border-radius: 12px; border: 1px solid var(--border);
+            background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 17px; transition: all 0.2s; flex-shrink: 0;
+        }
+        .btn-attach:hover { border-color: var(--accent-purple); color: var(--text-primary); background: rgba(124,58,237,0.1); }
+
+        /* Image preview strip above input */
+        .image-preview-strip {
+            display: none; gap: 8px; padding: 8px 24px 0;
+            max-width: 900px; margin: 0 auto; flex-wrap: wrap;
+        }
+        .image-preview-strip.has-images { display: flex; }
+        .image-thumb {
+            position: relative; width: 64px; height: 64px; border-radius: 8px;
+            overflow: hidden; border: 1px solid var(--border); flex-shrink: 0;
+        }
+        .image-thumb img { width: 100%; height: 100%; object-fit: cover; }
+        .image-thumb .remove-img {
+            position: absolute; top: 2px; right: 2px; width: 18px; height: 18px;
+            border-radius: 50%; background: rgba(0,0,0,0.7); border: none;
+            color: #fff; font-size: 11px; cursor: pointer; display: flex;
+            align-items: center; justify-content: center; line-height: 1;
+        }
+        .image-thumb .remove-img:hover { background: rgba(239,68,68,0.85); }
+
+        /* Images inside chat bubbles */
+        .bubble-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+        .bubble-images img {
+            max-width: 260px; max-height: 220px; border-radius: 10px;
+            object-fit: cover; border: 1px solid var(--border); cursor: pointer;
+        }
+        .bubble-images img:hover { opacity: 0.9; }
+
+        /* Lightbox */
+        .img-lightbox {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+            z-index: 500; align-items: center; justify-content: center;
+        }
+        .img-lightbox.open { display: flex; }
+        .img-lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 12px; }
+        .img-lightbox-close {
+            position: absolute; top: 18px; right: 22px; font-size: 28px;
+            color: #fff; cursor: pointer; background: none; border: none;
+            line-height: 1; opacity: 0.8;
+        }
+        .img-lightbox-close:hover { opacity: 1; }
+
+        /* Drag-over highlight on chat area */
+        .messages-container.drag-over { outline: 2px dashed var(--accent-purple); outline-offset: -4px; }
     </style>
 </head>
 <body>
@@ -293,10 +346,20 @@
         </div>
     </div>
 
+    <!-- Image lightbox -->
+    <div class="img-lightbox" id="imgLightbox" onclick="closeLightbox()">
+        <button class="img-lightbox-close" onclick="closeLightbox()">✕</button>
+        <img id="lightboxImg" src="" alt="">
+    </div>
+
     <!-- Input -->
     <div class="input-area">
+        <!-- Image previews above textarea -->
+        <div class="image-preview-strip" id="imagePreviewStrip"></div>
         <div class="input-wrapper">
-            <textarea id="chatInput" placeholder="Type your message..." rows="1" onkeydown="handleKeyDown(event)"></textarea>
+            <button class="btn-attach" id="attachBtn" title="Attach image (or drag & drop)" onclick="document.getElementById('imageFileInput').click()">🖼️</button>
+            <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none" onchange="handleImageFiles(this.files)">
+            <textarea id="chatInput" placeholder="Type your message... (or drop an image here)" rows="1" onkeydown="handleKeyDown(event)"></textarea>
             <button class="btn-send" id="sendBtn" onclick="sendMessage()">➤</button>
         </div>
     </div>
@@ -321,6 +384,7 @@
         let agentConfig = null;
         let selectedModel = null;
         let mcpUserConfigs = {}; // {mcp_name: {KEY: value}}
+        let pendingImages = [];  // [{data: base64, media_type, objectUrl, name}]
 
         const params = new URLSearchParams(window.location.search);
         taskId = params.get('task_id');
@@ -375,6 +439,7 @@
 
         function useSuggestion(text) {
             document.getElementById('chatInput').value = text;
+            clearPendingImages();
             sendMessage();
         }
 
@@ -385,12 +450,16 @@
         async function sendMessage() {
             const input = document.getElementById('chatInput');
             const message = input.value.trim();
-            if (!message) return;
+            if (!message && pendingImages.length === 0) return;
 
             const welcome = document.getElementById('welcomeMessage');
             if (welcome) welcome.style.display = 'none';
 
-            addMessage(message, 'user');
+            // Snapshot images and clear pending queue
+            const imagesToSend = [...pendingImages];
+            clearPendingImages();
+
+            addUserMessage(message, imagesToSend);
             input.value = '';
             autoResize(input);
 
@@ -399,13 +468,19 @@
 
             try {
                 const payload = {
-                    message,
+                    message: message || '(see attached image)',
                     conversation_id: conversationId,
                     llm_provider: document.getElementById('chatLlmProvider').value,
                 };
                 if (selectedModel) payload.model = selectedModel;
                 if (!conversationId && Object.keys(mcpUserConfigs).length > 0) {
                     payload.mcp_configs = mcpUserConfigs;
+                }
+                if (imagesToSend.length > 0) {
+                    payload.images = imagesToSend.map(img => ({
+                        data: img.data,
+                        media_type: img.media_type,
+                    }));
                 }
 
                 const res = await fetch(`${API_BASE}/chat/${taskId}`, {
@@ -441,6 +516,88 @@
             }
         }
 
+        /* ── Image helpers ────────────────────────────────────────── */
+
+        function handleImageFiles(files) {
+            Array.from(files).forEach(file => {
+                if (!file.type.startsWith('image/')) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const dataUrl = e.target.result;
+                    // Strip data-URI prefix — keep raw base64
+                    const base64 = dataUrl.split(',')[1];
+                    const entry = {
+                        data: base64,
+                        media_type: file.type,
+                        objectUrl: dataUrl,
+                        name: file.name,
+                    };
+                    pendingImages.push(entry);
+                    renderImagePreview();
+                };
+                reader.readAsDataURL(file);
+            });
+            // Reset input so same file can be re-selected
+            document.getElementById('imageFileInput').value = '';
+        }
+
+        function renderImagePreview() {
+            const strip = document.getElementById('imagePreviewStrip');
+            if (pendingImages.length === 0) {
+                strip.classList.remove('has-images');
+                strip.innerHTML = '';
+                return;
+            }
+            strip.classList.add('has-images');
+            strip.innerHTML = pendingImages.map((img, i) => `
+                <div class="image-thumb">
+                    <img src="${img.objectUrl}" alt="${escapeHtml(img.name)}">
+                    <button class="remove-img" onclick="removeImage(${i})" title="Remove">✕</button>
+                </div>
+            `).join('');
+        }
+
+        function removeImage(index) {
+            pendingImages.splice(index, 1);
+            renderImagePreview();
+        }
+
+        function clearPendingImages() {
+            pendingImages = [];
+            renderImagePreview();
+        }
+
+        /* ── Drag & drop on messages area ──────────────────────────── */
+
+        function _setupDragDrop() {
+            const area = document.getElementById('messagesContainer');
+            area.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                area.classList.add('drag-over');
+            });
+            area.addEventListener('dragleave', () => area.classList.remove('drag-over'));
+            area.addEventListener('drop', (e) => {
+                e.preventDefault();
+                area.classList.remove('drag-over');
+                const files = e.dataTransfer?.files;
+                if (files && files.length) handleImageFiles(files);
+            });
+        }
+        _setupDragDrop();
+
+        /* ── Lightbox ────────────────────────────────────────────── */
+
+        function openLightbox(src) {
+            document.getElementById('lightboxImg').src = src;
+            document.getElementById('imgLightbox').classList.add('open');
+        }
+        function closeLightbox() {
+            document.getElementById('imgLightbox').classList.remove('open');
+        }
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeLightbox();
+        });
+
         function addMessage(text, type) {
             const container = document.getElementById('messagesContainer');
             const avatar = type === 'user' ? '👤' : '🤖';
@@ -450,6 +607,32 @@
                 <div class="message-avatar">${avatar}</div>
                 <div class="message-content">
                     <div class="message-bubble">${escapeHtml(text)}</div>
+                </div>
+            `;
+            container.appendChild(div);
+            scrollToBottom();
+        }
+
+        function addUserMessage(text, images) {
+            const container = document.getElementById('messagesContainer');
+            const div = document.createElement('div');
+            div.className = 'message user';
+
+            let imagesHtml = '';
+            if (images && images.length > 0) {
+                const imgs = images.map(img =>
+                    `<img src="${img.objectUrl}" alt="attached image" onclick="openLightbox('${img.objectUrl}')">`
+                ).join('');
+                imagesHtml = `<div class="bubble-images">${imgs}</div>`;
+            }
+
+            const textHtml = text ? `<div class="message-bubble">${escapeHtml(text)}</div>` : '';
+
+            div.innerHTML = `
+                <div class="message-avatar">👤</div>
+                <div class="message-content">
+                    ${imagesHtml}
+                    ${textHtml}
                 </div>
             `;
             container.appendChild(div);
@@ -494,7 +677,7 @@
                 <div class="message-avatar">🤖</div>
                 <div class="message-content">
                     ${toolCardsHtml}
-                    <div class="message-bubble">${escapeHtml(text)}</div>
+                    <div class="message-bubble">${renderAgentText(text)}</div>
                 </div>
             `;
             container.appendChild(div);
@@ -521,12 +704,53 @@
             return div.innerHTML;
         }
 
+        /**
+         * Render agent text:
+         * - Converts markdown images  ![alt](url)  to <img> with lightbox
+         * - Converts data URIs in text to inline images
+         * - Escapes the rest of the text safely
+         */
+        function renderAgentText(text) {
+            if (!text) return '';
+            // Split on markdown image syntax: ![alt](url)
+            const parts = text.split(/(!\[([^\]]*)\]\((data:image\/[^)]+|https?:\/\/[^)]+)\))/g);
+            let html = '';
+            for (let i = 0; i < parts.length; i++) {
+                if (i % 4 === 0) {
+                    // Plain text segment
+                    html += escapeHtml(parts[i]);
+                } else if (i % 4 === 1) {
+                    // Full match — render as clickable image
+                    const alt = parts[i + 1] || 'image';
+                    const src = parts[i + 2] || '';
+                    html += `<div class="bubble-images"><img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" onclick="openLightbox('${escapeHtml(src)}')" style="max-width:260px;border-radius:10px;cursor:pointer;"></div>`;
+                    i += 2; // skip alt and src groups
+                }
+            }
+            return html || escapeHtml(text);
+        }
+
         function autoResize(el) {
             el.style.height = 'auto';
             el.style.height = Math.min(el.scrollHeight, 120) + 'px';
         }
 
         document.getElementById('chatInput').addEventListener('input', function() { autoResize(this); });
+
+        // Paste images from clipboard (Ctrl+V)
+        document.getElementById('chatInput').addEventListener('paste', function(e) {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+            let hasImage = false;
+            Array.from(items).forEach(item => {
+                if (item.type.startsWith('image/')) {
+                    hasImage = true;
+                    const file = item.getAsFile();
+                    if (file) handleImageFiles([file]);
+                }
+            });
+            if (hasImage) e.preventDefault();
+        });
 
         function showConfigModal(configRequired) {
             const container = document.getElementById('configFields');

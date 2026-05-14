@@ -56,6 +56,7 @@ class AgentExecuteRequest(BaseModel):
     mcp_configs: list[dict] = []
     mcp_user_configs: dict[str, dict] | None = None
     model: str | None = None
+    images: list[dict] = []  # [{data: base64, media_type: "image/jpeg"}, ...]
 
 
 class AgentExecuteResponse(BaseModel):
@@ -109,6 +110,7 @@ async def execute_agent(request: AgentExecuteRequest):
             mcp_tools=mcp_tools,
             skill_ids=request.skill_ids,
             model=request.model,
+            images=request.images or [],
         )
 
         return AgentExecuteResponse(
