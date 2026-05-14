@@ -121,7 +121,7 @@ def _resolve_agent_model(stored_model: str) -> str:
 
     if provider == "ollama_remote":
         tag = default_remote_model_tag()
-        return f"ollama:{tag}"
+        return f"ollama_remote:{tag}"
 
     if provider == "gemini":
         # Return empty so create_llm picks up GOOGLE_API_KEY + DEEPAGENT_MODEL

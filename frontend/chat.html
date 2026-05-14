@@ -473,7 +473,7 @@
                     llm_provider: document.getElementById('chatLlmProvider').value,
                 };
                 if (selectedModel) payload.model = selectedModel;
-                if (!conversationId && Object.keys(mcpUserConfigs).length > 0) {
+                if (Object.keys(mcpUserConfigs).length > 0) {
                     payload.mcp_configs = mcpUserConfigs;
                 }
                 if (imagesToSend.length > 0) {

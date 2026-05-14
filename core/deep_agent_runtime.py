@@ -80,11 +80,13 @@ def _resolve_skills_dir() -> str:
 # -----------------------------------------------
 def _is_openrouter_model(model: str) -> bool:
     """
-    Return True if the model string looks like an OpenRouter model ID (e.g. "meta-llama/llama-3.1-8b-instruct:free").
-    OpenRouter IDs always contain "/" and are NOT native Gemini model names.
-    Gemini models start with "gemini-" or "models/gemini".
+    Return True if the model string looks like an OpenRouter model ID
+    (e.g. "meta-llama/llama-3.1-8b-instruct:free").
+    OpenRouter IDs always contain "/" and are NOT native Gemini/Ollama model names.
     """
     if model.startswith("gemini") or model.startswith("models/gemini"):
+        return False
+    if model.startswith("ollama:") or model.startswith("ollama_remote:"):
         return False
     return "/" in model
 
@@ -110,13 +112,34 @@ def create_llm(model: str | None = None, temperature: float | None = None):
     effective_model = model or DEEPAGENT_MODEL
     effective_temp = temperature if temperature is not None else DEEPAGENT_TEMPERATURE
 
-    # ── Ollama route ──────────────────────────────────────────────────────────
+    # ── Ollama (remote) route ─────────────────────────────────────────────────
+    if effective_model.startswith("ollama_remote:"):
+        from langchain_openai import ChatOpenAI
+
+        ollama_tag = effective_model.split(":", 1)[1]
+        remote_base = os.getenv("OLLAMA_REMOTE_BASE_URL", "").strip().rstrip("/")
+        if not remote_base:
+            raise RuntimeError(
+                "OLLAMA_REMOTE_BASE_URL is not set. "
+                "Add it to .env: OLLAMA_REMOTE_BASE_URL=https://your-ngrok-url"
+            )
+        api_key = os.getenv("OLLAMA_REMOTE_API_KEY", "ollama")
+        logger.info("[DeepAgent] Using Ollama remote: %s @ %s", ollama_tag, remote_base)
+        return ChatOpenAI(
+            model=ollama_tag,
+            base_url=f"{remote_base}/v1",
+            api_key=api_key,
+            temperature=effective_temp,
+            default_headers={"ngrok-skip-browser-warning": "1"},
+        )
+
+    # ── Ollama (local) route ──────────────────────────────────────────────────
     if effective_model.startswith("ollama:"):
         from langchain_openai import ChatOpenAI
 
         ollama_tag = effective_model.split(":", 1)[1]
-        ollama_base = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-        logger.info("[DeepAgent] Using Ollama: %s @ %s", ollama_tag, ollama_base)
+        ollama_base = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+        logger.info("[DeepAgent] Using Ollama local: %s @ %s", ollama_tag, ollama_base)
         return ChatOpenAI(
             model=ollama_tag,
             base_url=f"{ollama_base}/v1",

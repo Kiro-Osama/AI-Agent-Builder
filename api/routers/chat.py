@@ -122,7 +122,7 @@ def _resolve_model(request_model: str | None, config_model: str, llm_provider: s
 
     if llm_provider == "ollama_remote":
         remote_model = os.getenv("OLLAMA_REMOTE_MODEL", "qwen3.5:4b")
-        return f"ollama:{remote_model}"
+        return f"ollama_remote:{remote_model}"
 
     if llm_provider == "gemini" or os.getenv("GOOGLE_API_KEY", "").strip():
         return os.getenv("DEEPAGENT_MODEL", "gemini-3.1-flash-lite-preview")
