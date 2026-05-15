@@ -259,6 +259,57 @@ ON CONFLICT (mcp_name) DO UPDATE SET
     )
 
 
+    op.execute(
+        """
+INSERT INTO mcps (mcp_name, docker_image, description, tools_provided, category, run_config, requires_user_config, config_schema)
+VALUES (
+    'mcp-windows',
+    '',
+    'Windows-MCP Server. Runs directly on your Windows host machine and gives AI agents full control over the desktop: click, type, screenshot, run apps, PowerShell, clipboard, registry, and more. Must be running locally before use.',
+    '[
+        {"name": "Screenshot", "description": "STEP 1: Capture a screenshot for visual context only. Does NOT return element IDs. Use this to see the screen."},
+        {"name": "Snapshot", "description": "REQUIRED before Type/Click/Scroll. Returns interactive element IDs (integers) needed for all interaction tools. Call this after launching any app to get element labels."},
+        {"name": "Click", "description": "Click at screen coordinates (x, y). Use coordinates from Screenshot, or use label (integer from Snapshot) to click a specific element."},
+        {"name": "Type", "description": "Type text into an element. REQUIRES label (integer) from Snapshot — NOT an app name string. Always call Snapshot first to get the label integer."},
+        {"name": "Scroll", "description": "Scroll vertically or horizontally. Use label (integer from Snapshot) or screen coordinates."},
+        {"name": "Move", "description": "Move or drag the mouse to coordinates."},
+        {"name": "Shortcut", "description": "Press keyboard shortcuts like Ctrl+C, Alt+Tab, Win+D, etc."},
+        {"name": "App", "description": "Launch app by name (mode=launch, name=appname), resize, move windows, or switch between apps. No label needed for launch."},
+        {"name": "Shell", "description": "Execute PowerShell commands on the host Windows machine."},
+        {"name": "Scrape", "description": "Scrape a web page for information given a URL."},
+        {"name": "Clipboard", "description": "Read or set Windows clipboard content."},
+        {"name": "Process", "description": "List running processes or terminate them by PID or name."},
+        {"name": "Notification", "description": "Send a Windows toast notification with title and message."},
+        {"name": "Registry", "description": "Read, write, delete or list Windows Registry values and keys."},
+        {"name": "MultiSelect", "description": "Select multiple items with optional Ctrl key."},
+        {"name": "MultiEdit", "description": "Enter text into multiple input fields at specified coordinates."},
+        {"name": "Wait", "description": "Pause for a defined duration in seconds."}
+    ]'::jsonb,
+    'system',
+    '{
+        "transport": "sse",
+        "url": "http://host.docker.internal:8765/sse",
+        "stdin_open": false,
+        "command": [],
+        "volumes": {},
+        "environment": {},
+        "notes": "Run on host: uvx windows-mcp --transport sse --host 0.0.0.0 --port 8765"
+    }'::jsonb,
+    false,
+    '[]'::jsonb
+)
+ON CONFLICT (mcp_name) DO UPDATE SET
+    docker_image = EXCLUDED.docker_image,
+    description = EXCLUDED.description,
+    tools_provided = EXCLUDED.tools_provided,
+    category = EXCLUDED.category,
+    run_config = EXCLUDED.run_config,
+    requires_user_config = EXCLUDED.requires_user_config,
+    config_schema = EXCLUDED.config_schema;
+"""
+    )
+
+
 def downgrade() -> None:
     op.execute(
         """
@@ -269,7 +320,8 @@ DELETE FROM mcps WHERE mcp_name IN (
     'mcp-memory',
     'mcp-notion',
     'mcp-slack',
-    'mcp-gitlab'
+    'mcp-gitlab',
+    'mcp-windows'
 );
 """
     )
