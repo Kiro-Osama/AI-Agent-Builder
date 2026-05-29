@@ -7,7 +7,8 @@ langchain_mcp_adapters for native DeepAgent integration.
 Supports:
     - HTTP (Streamable HTTP) transport — recommended for Docker containers
     - SSE (Server-Sent Events) transport — legacy but still supported
-    - stdio transport — via subprocess (fallback for containers without HTTP)
+    - stdio transport — via subprocess (fallback, only if HTTP not available)
+    - persistent containers — Docker containers kept alive between requests
 
 Usage:
     tools = await load_mcp_tools_for_agent(mcp_configs)
@@ -117,7 +118,17 @@ def _patch_label_schema(tools: list) -> list:
     Uses object.__setattr__ to bypass Pydantic's __setattr__ guard.
     """
     patched_names = []
+    
+    # Filter out complex tools that crash Gemini's OpenAPI schema validation
+    # (they use untyped array of arrays which Gemini rejects)
+    filtered_tools = []
     for tool in tools:
+        if tool.name in ["MultiSelect", "MultiEdit"]:
+            logger.info("[MCPAdapter] Filtering out %s to prevent schema crashes", tool.name)
+            continue
+        filtered_tools.append(tool)
+        
+    for tool in filtered_tools:
         schema = getattr(tool, "args_schema", None)
 
         if isinstance(schema, dict):
@@ -127,14 +138,22 @@ def _patch_label_schema(tools: list) -> list:
             fields = getattr(schema, "model_fields", {})
             needs_coerce = "label" in fields or "loc" in fields
 
+        if tool.name == "Type":
+            # Override description to force LLM to provide 'loc'
+            tool.description = "Type text. Required: text=<string>, loc=[x, y]. You MUST provide loc=[x,y] by taking a Snapshot first to find the text area coordinates. Do not omit loc."
+            
         original_ainvoke = tool.ainvoke  # bound method — captures self
 
         def _make_patched_ainvoke(orig, do_coerce: bool):
             async def _patched_ainvoke(input_: Any, config: Any = None, **kwargs: Any) -> Any:
                 if do_coerce:
                     input_ = _coerce_label(input_)
-                result = await orig(input_, config, **kwargs)
-                return _truncate_result(result)
+                try:
+                    result = await orig(input_, config, **kwargs)
+                    return _truncate_result(result)
+                except Exception as e:
+                    logger.warning("[MCPAdapter] Tool execution error: %s", e)
+                    return f"Error executing tool: {str(e)}. Please correct your arguments and try again."
             return _patched_ainvoke
 
         try:
@@ -147,9 +166,9 @@ def _patch_label_schema(tools: list) -> list:
     if patched_names:
         logger.info("[MCPAdapter] coerce+truncate patched on: %s", patched_names)
     else:
-        logger.info("[MCPAdapter] truncate wrapper applied to all %d tools", len(tools))
+        logger.info("[MCPAdapter] truncate wrapper applied to all %d tools", len(filtered_tools))
 
-    return tools
+    return filtered_tools
 
 
 async def load_mcp_tools_for_agent(
@@ -179,28 +198,42 @@ async def load_mcp_tools_for_agent(
 
     server_configs = {}
 
+    # ── Map of MCPs managed as docker-compose services ──
+    # These containers are always running on the compose network.
+    # agent-engine connects by service name — zero startup cost.
+    COMPOSE_MANAGED_MCPS = {
+        "mcp-pentest": "http://mcp-pentest:8080/mcp",
+        # Add more compose-managed MCPs here as needed:
+        # "mcp-filesystem": "http://mcp-filesystem:8080/mcp",
+    }
+
     for mcp in mcp_configs:
         name = mcp.get("mcp_name", "")
         if not name:
             continue
 
         run_config = mcp.get("run_config", {}) or {}
-        # transport can be top-level on the mcp dict (runtime override)
-        # or stored inside run_config (DB default) — run_config wins for external MCPs
         transport = mcp.get("transport") or run_config.get("transport", "stdio")
         port = mcp.get("running_port")
-
-        # Build connection config based on transport type
         direct_url = run_config.get("url", "")
 
+        # ── Priority 1: Compose-managed service (always running) ──
+        if name in COMPOSE_MANAGED_MCPS:
+            compose_url = COMPOSE_MANAGED_MCPS[name]
+            logger.info("[MCPAdapter] %s: using compose service at %s", name, compose_url)
+            server_configs[name] = {
+                "transport": "streamable_http",
+                "url": compose_url,
+            }
+            continue
+
+        # ── Priority 2: External HTTP/SSE with URL ──
         if transport == "http" and direct_url:
-            # External HTTP MCP (not Docker-managed) — use URL as-is
             server_configs[name] = {
                 "transport": "streamable_http",
                 "url": direct_url,
             }
         elif transport == "sse" and direct_url:
-            # External SSE MCP (e.g. Windows-MCP running on host machine)
             server_configs[name] = {
                 "transport": "sse",
                 "url": direct_url,
@@ -215,37 +248,37 @@ async def load_mcp_tools_for_agent(
                 "transport": "sse",
                 "url": f"http://localhost:{port}/sse",
             }
+
+        # ── Priority 3: stdio fallback (ephemeral container) ──
         elif transport == "stdio":
-            # For stdio containers, we need docker_image and command
             docker_image = mcp.get("docker_image", "")
             if not docker_image:
                 logger.warning("[MCPAdapter] Skipping %s: no docker_image for stdio", name)
                 continue
 
             cmd = ["docker", "run", "-i", "--rm"]
+            # Add compose network so container can reach other services
+            cmd.extend(["--network", "ai_agent_builder_antogravity_default"])
+            cmd.extend(["--add-host", "host.docker.internal:host-gateway"])
 
-            # Add volumes
             workspace = os.getenv("WORKSPACE_PATH", "/workspace")
             volumes = run_config.get("volumes", {})
             for host_path, container_path in volumes.items():
                 actual = host_path.replace("/host/workspace", workspace)
                 cmd.extend(["-v", f"{actual}:{container_path}"])
 
-            # Add environment and dynamic volumes
             env = dict(run_config.get("environment", {}))
             command_args = list(run_config.get("command", []))
-            
+
+            if "ramgameer/pentest-mcp" in docker_image and not command_args:
+                command_args = ["python3", "/opt/pentest-mcp/pentestMCP.py", "--transport", "stdio"]
+
             if mcp_user_configs and name in mcp_user_configs:
                 user_cfg = mcp_user_configs[name]
                 env.update(user_cfg)
-                
-                # Check if this MCP configures a specific directory (like mcp-filesystem)
                 if "allowed_directory" in user_cfg and user_cfg["allowed_directory"].strip():
                     host_dir = user_cfg["allowed_directory"].strip()
-                    # Mount the user-provided host path to /user_dir in the container
                     cmd.extend(["-v", f"{host_dir}:/user_dir"])
-                    
-                    # For mcp-filesystem, we append /user_dir to the allowed paths
                     if "/user_dir" not in command_args:
                         command_args.append("/user_dir")
 
@@ -269,6 +302,7 @@ async def load_mcp_tools_for_agent(
                 "[MCPAdapter] Skipping %s: transport=%s, port=%s — unsupported combo",
                 name, transport, port,
             )
+
 
     if not server_configs:
         logger.info("[MCPAdapter] No MCP servers to connect to")

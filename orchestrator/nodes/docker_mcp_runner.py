@@ -36,18 +36,21 @@ async def docker_mcp_runner(state: AgentBuilderState) -> dict:
         run_config = mcp.get("run_config", {}) or {}
 
         if not docker_image:
-            logger.warning(f"  ⚠️ {mcp_name}: no docker_image, skipping")
-            continue
-
-        # Try to pre-pull the image (best effort, don't fail the pipeline)
-        try:
-            import docker as docker_lib
-            client = docker_lib.from_env()
-            logger.info(f"  📥 Pulling {docker_image}...")
-            client.images.pull(docker_image)
-            logger.info(f"  ✅ {mcp_name}: image ready")
-        except Exception as e:
-            logger.warning(f"  ⚠️ {mcp_name}: pre-pull failed ({e}), will pull at chat time")
+            if run_config.get("transport") == "sse" and run_config.get("url"):
+                logger.info(f"  🌐 {mcp_name}: external SSE MCP, no image pull needed")
+            else:
+                logger.warning(f"  ⚠️ {mcp_name}: no docker_image and not an external SSE MCP, skipping")
+                continue
+        else:
+            # Try to pre-pull the image (best effort, don't fail the pipeline)
+            try:
+                import docker as docker_lib
+                client = docker_lib.from_env()
+                logger.info(f"  📥 Pulling {docker_image}...")
+                client.images.pull(docker_image)
+                logger.info(f"  ✅ {mcp_name}: image ready")
+            except Exception as e:
+                logger.warning(f"  ⚠️ {mcp_name}: pre-pull failed ({e}), will pull at chat time")
 
         # Pass through all metadata for template_builder
         running_mcps.append({

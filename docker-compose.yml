@@ -138,14 +138,12 @@ services:
   # -------------------------------------------
   frontend:
     build:
-      context: ./frontend
+      context: ./frontend-react
       dockerfile: Dockerfile
     container_name: agentbuilder-frontend
     restart: unless-stopped
     ports:
       - "0.0.0.0:3000:80"
-    volumes:
-      - ./frontend:/usr/share/nginx/html:ro
     depends_on:
       - api
 
@@ -162,6 +160,16 @@ services:
       - db
     profiles:
       - dev
+
+  # -------------------------------------------
+  # Vulnerable Web App for Security Testing
+  # -------------------------------------------
+  juice-shop:
+    image: bkimminich/juice-shop:latest
+    container_name: agentbuilder-juice-shop
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
 
 volumes:
   pgdata:

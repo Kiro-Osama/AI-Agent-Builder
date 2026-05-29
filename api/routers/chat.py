@@ -13,17 +13,19 @@ On each message:
        - Sandboxed workspace via FilesystemBackend
     4. Return response + tool calls
 """
+import json
 import logging
 import os
 import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.agent_engine_client import execute_on_agent_engine
+from core.agent_engine_client import execute_on_agent_engine, stream_from_agent_engine
 from core.db import get_db
 from core.mcp_user_config import mcp_config_required_for_modal
 from core.models import BuildHistory
@@ -255,10 +257,95 @@ async def get_agent_info(task_id: str, db: AsyncSession = Depends(get_db)):
     }
 
 
+class ChatStreamRequest(BaseModel):
+    message: str
+    conversation_id: str | None = None
+    llm_provider: str | None = None
+    model: str | None = None
+
+
+@router.post("/chat/{task_id}/stream")
+async def chat_stream(
+    task_id: str,
+    request: ChatStreamRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Stream a chat message via SSE (Server-Sent Events).
+    POST to avoid GET body/buffering issues.
+    Events: tool_start, tool_end, text, done, error.
+    """
+    config = await _load_agent_config(db, task_id)
+    conv_id = request.conversation_id or str(uuid.uuid4())
+    key = _session_key(task_id, conv_id)
+    if key not in conversations:
+        conversations[key] = []
+    history = conversations[key]
+    model = _resolve_model(request.model, config["model"], request.llm_provider)
+    selected_mcps = config.get("selected_mcps", [])
+    selected_skills = config.get("selected_skills", [])
+    skill_ids = [s["skill_id"] for s in selected_skills if s.get("skill_id")]
+
+    # Snapshot history before appending user message
+    history_snapshot = list(history)
+    history.append({"role": "user", "content": request.message})
+
+    async def event_gen():
+        collected_text = ""
+        try:
+            async for event in stream_from_agent_engine(
+                system_prompt=config["system_prompt"],
+                user_message=request.message,
+                history=history_snapshot,
+                skill_ids=skill_ids or None,
+                mcp_configs=selected_mcps,
+                mcp_user_configs=None,
+                model=model,
+            ):
+                event_type = event.get("type")
+
+                if event_type == "tool_start":
+                    yield f"data: {json.dumps(event)}\n\n"
+
+                elif event_type == "tool_end":
+                    yield f"data: {json.dumps(event)}\n\n"
+
+                elif event_type == "text":
+                    collected_text += event.get("content", "")
+                    yield f"data: {json.dumps(event)}\n\n"
+
+                elif event_type == "done":
+                    if collected_text:
+                        history.append({"role": "assistant", "content": collected_text})
+                    done_event = {**event, "conversation_id": conv_id, "agent_name": config["agent_name"]}
+                    yield f"data: {json.dumps(done_event)}\n\n"
+                    return
+
+                elif event_type == "error":
+                    err_msg = event.get("message", "Unknown error")
+                    history.append({"role": "assistant", "content": f"Error: {err_msg}"})
+                    yield f"data: {json.dumps(event)}\n\n"
+                    return
+
+        except Exception as e:
+            logger.error("[ChatStream] Generator error: %s", e, exc_info=True)
+            err = json.dumps({"type": "error", "message": str(e)})
+            yield f"data: {err}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @router.delete("/chat/{conversation_id}/session")
 async def end_session(conversation_id: str):
     """Explicitly end a chat session and cleanup."""
-    # Remove all conversation histories for this conversation_id across tasks
     keys_to_drop = [k for k in list(conversations.keys()) if k.endswith(f":{conversation_id}")]
     for k in keys_to_drop:
         conversations.pop(k, None)

@@ -302,6 +302,18 @@ async def run_deep_agent(
     skill_paths = resolve_skill_paths(skill_ids)
     logger.info("[DeepAgent] Skill paths: %s", skill_paths)
 
+    # Dynamically get tool names to keep the prompt generic
+    tool_names = [t.name for t in mcp_tools] if mcp_tools else []
+    tool_examples = f" (e.g., '{tool_names[0]}')" if tool_names else ""
+    
+    # Inject strong anti-hallucination instructions to prevent R1/Ollama models from making up tools
+    strict_system_prompt = system_prompt + (
+        "\n\nCRITICAL TOOL USAGE INSTRUCTIONS:\n"
+        "1. You MUST ONLY use the tools explicitly provided to you in your tools list.\n"
+        "2. NEVER use or attempt to call tools that are not explicitly provided (e.g., do NOT use 'google:search', 'search', or 'web_search' unless explicitly in your tools list).\n"
+        f"3. Always use the exact tool name provided{tool_examples}."
+    )
+
     # 3. Create the DeepAgent (following user's reference architecture exactly)
     agent_kwargs: dict[str, Any] = {
         "model": llm,
@@ -309,7 +321,7 @@ async def run_deep_agent(
             root_dir=effective_workspace,
             virtual_mode=True,
         ),
-        "system_prompt": system_prompt,
+        "system_prompt": strict_system_prompt,
     }
 
     if skill_paths:
@@ -408,13 +420,23 @@ async def stream_deep_agent(
     llm = create_llm(model=effective_model)
     skill_paths = resolve_skill_paths(skill_ids)
 
+    tool_names = [t.name for t in mcp_tools] if mcp_tools else []
+    tool_examples = f" (e.g., '{tool_names[0]}')" if tool_names else ""
+
+    strict_system_prompt = system_prompt + (
+        "\n\nCRITICAL TOOL USAGE INSTRUCTIONS:\n"
+        "1. You MUST ONLY use the tools explicitly provided to you in your tools list.\n"
+        "2. NEVER use or attempt to call tools that are not explicitly provided (e.g., do NOT use 'google:search', 'search', or 'web_search' unless explicitly in your tools list).\n"
+        f"3. Always use the exact tool name provided{tool_examples}."
+    )
+
     agent_kwargs: dict[str, Any] = {
         "model": llm,
         "backend": _FilesystemBackend(
             root_dir=effective_workspace,
             virtual_mode=True,
         ),
-        "system_prompt": system_prompt,
+        "system_prompt": strict_system_prompt,
     }
     if skill_paths:
         agent_kwargs["skills"] = skill_paths

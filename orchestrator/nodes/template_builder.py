@@ -136,11 +136,14 @@ async def template_builder(state: AgentBuilderState) -> dict:
         seen = set()
         for m in all_mcps:
             name = m.get("mcp_name", "")
-            if name not in seen and m.get("docker_image"):
+            has_image = bool(m.get("docker_image"))
+            has_url = bool(m.get("run_config", {}).get("url"))
+            
+            if name not in seen and (has_image or has_url):
                 seen.add(name)
                 full_mcps.append({
                     "mcp_name": name,
-                    "docker_image": m["docker_image"],
+                    "docker_image": m.get("docker_image", ""),
                     "run_config": m.get("run_config", {}),
                     "tools_provided": m.get("tools_provided", []),
                 })
@@ -187,10 +190,13 @@ def _inject_mcp_metadata(template: dict, running_mcps: list, selected_mcps: list
     
     for m in selected_mcps:
         name = m.get("mcp_name", "")
-        if name and m.get("docker_image"):
+        has_image = bool(m.get("docker_image"))
+        has_url = bool(m.get("run_config", {}).get("url"))
+        
+        if name and (has_image or has_url):
             mcp_lookup[name] = {
                 "mcp_name": name,
-                "docker_image": m["docker_image"],
+                "docker_image": m.get("docker_image", ""),
                 "run_config": m.get("run_config", {}),
                 "tools_provided": m.get("tools_provided", []),
                 "default_ports": m.get("default_ports", []),
