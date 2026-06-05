@@ -198,15 +198,6 @@ async def load_mcp_tools_for_agent(
 
     server_configs = {}
 
-    # ── Map of MCPs managed as docker-compose services ──
-    # These containers are always running on the compose network.
-    # agent-engine connects by service name — zero startup cost.
-    COMPOSE_MANAGED_MCPS = {
-        "mcp-pentest": "http://mcp-pentest:8080/mcp",
-        # Add more compose-managed MCPs here as needed:
-        # "mcp-filesystem": "http://mcp-filesystem:8080/mcp",
-    }
-
     for mcp in mcp_configs:
         name = mcp.get("mcp_name", "")
         if not name:
@@ -217,17 +208,7 @@ async def load_mcp_tools_for_agent(
         port = mcp.get("running_port")
         direct_url = run_config.get("url", "")
 
-        # ── Priority 1: Compose-managed service (always running) ──
-        if name in COMPOSE_MANAGED_MCPS:
-            compose_url = COMPOSE_MANAGED_MCPS[name]
-            logger.info("[MCPAdapter] %s: using compose service at %s", name, compose_url)
-            server_configs[name] = {
-                "transport": "streamable_http",
-                "url": compose_url,
-            }
-            continue
-
-        # ── Priority 2: External HTTP/SSE with URL ──
+        # ── HTTP/SSE with explicit URL ──
         if transport == "http" and direct_url:
             server_configs[name] = {
                 "transport": "streamable_http",
@@ -249,59 +230,76 @@ async def load_mcp_tools_for_agent(
                 "url": f"http://localhost:{port}/sse",
             }
 
-        # ── Priority 3: stdio fallback (ephemeral container) ──
+        # ── stdio: try persistent HTTP container first, fallback to ephemeral stdio ──
         elif transport == "stdio":
             docker_image = mcp.get("docker_image", "")
             if not docker_image:
                 logger.warning("[MCPAdapter] Skipping %s: no docker_image for stdio", name)
                 continue
 
-            cmd = ["docker", "run", "-i", "--rm"]
-            # Add compose network so container can reach other services
-            cmd.extend(["--network", "ai_agent_builder_antogravity_default"])
-            cmd.extend(["--add-host", "host.docker.internal:host-gateway"])
+            # Try to start/reuse a persistent HTTP container
+            from core.mcp_container_manager import ensure_persistent_container
+            persistent = await ensure_persistent_container(
+                mcp_name=name,
+                docker_image=docker_image,
+                run_config=run_config,
+                mcp_user_configs=mcp_user_configs,
+            )
 
-            workspace = os.getenv("WORKSPACE_PATH", "/workspace")
-            volumes = run_config.get("volumes", {})
-            for host_path, container_path in volumes.items():
-                actual = host_path.replace("/host/workspace", workspace)
-                cmd.extend(["-v", f"{actual}:{container_path}"])
+            if persistent:
+                logger.info("[MCPAdapter] %s: persistent HTTP at %s", name, persistent["url"])
+                server_configs[name] = {
+                    "transport": persistent["transport"],
+                    "url": persistent["url"],
+                }
+            else:
+                # Fallback: ephemeral stdio container
+                logger.warning("[MCPAdapter] %s: no HTTP support, using ephemeral stdio", name)
+                cmd = ["docker", "run", "-i", "--rm"]
+                cmd.extend(["--add-host", "host.docker.internal:host-gateway"])
 
-            env = dict(run_config.get("environment", {}))
-            command_args = list(run_config.get("command", []))
+                workspace = os.getenv("WORKSPACE_PATH", "/workspace")
+                volumes = run_config.get("volumes", {})
+                for host_path, container_path in volumes.items():
+                    actual = host_path.replace("/host/workspace", workspace)
+                    cmd.extend(["-v", f"{actual}:{container_path}"])
 
-            if "ramgameer/pentest-mcp" in docker_image and not command_args:
-                command_args = ["python3", "/opt/pentest-mcp/pentestMCP.py", "--transport", "stdio"]
+                env = dict(run_config.get("environment", {}))
+                command_args = list(run_config.get("command", []))
 
-            if mcp_user_configs and name in mcp_user_configs:
-                user_cfg = mcp_user_configs[name]
-                env.update(user_cfg)
-                if "allowed_directory" in user_cfg and user_cfg["allowed_directory"].strip():
-                    host_dir = user_cfg["allowed_directory"].strip()
-                    cmd.extend(["-v", f"{host_dir}:/user_dir"])
-                    if "/user_dir" not in command_args:
-                        command_args.append("/user_dir")
+                if "ramgameer/pentest-mcp" in docker_image and not command_args:
+                    command_args = ["python3", "/opt/pentest-mcp/pentestMCP.py", "--transport", "stdio"]
 
-            for key, val in env.items():
-                if val and val != "REQUIRED" and key != "allowed_directory":
-                    actual_val = os.getenv(key, val)
-                    cmd.extend(["-e", f"{key}={actual_val}"])
+                if mcp_user_configs and name in mcp_user_configs:
+                    user_cfg = mcp_user_configs[name]
+                    env.update(user_cfg)
+                    if "allowed_directory" in user_cfg and user_cfg["allowed_directory"].strip():
+                        host_dir = user_cfg["allowed_directory"].strip()
+                        cmd.extend(["-v", f"{host_dir}:/user_dir"])
+                        if "/user_dir" not in command_args:
+                            command_args.append("/user_dir")
 
-            cmd.append(docker_image)
-            if command_args:
-                cmd.extend(command_args)
+                for key, val in env.items():
+                    if val and val != "REQUIRED" and key != "allowed_directory":
+                        actual_val = os.getenv(key, val)
+                        cmd.extend(["-e", f"{key}={actual_val}"])
 
-            server_configs[name] = {
-                "transport": "stdio",
-                "command": cmd[0],
-                "args": cmd[1:],
-            }
+                cmd.append(docker_image)
+                if command_args:
+                    cmd.extend(command_args)
+
+                server_configs[name] = {
+                    "transport": "stdio",
+                    "command": cmd[0],
+                    "args": cmd[1:],
+                }
 
         else:
             logger.warning(
                 "[MCPAdapter] Skipping %s: transport=%s, port=%s — unsupported combo",
                 name, transport, port,
             )
+
 
 
     if not server_configs:

@@ -311,7 +311,16 @@ async def run_deep_agent(
         "\n\nCRITICAL TOOL USAGE INSTRUCTIONS:\n"
         "1. You MUST ONLY use the tools explicitly provided to you in your tools list.\n"
         "2. NEVER use or attempt to call tools that are not explicitly provided (e.g., do NOT use 'google:search', 'search', or 'web_search' unless explicitly in your tools list).\n"
-        f"3. Always use the exact tool name provided{tool_examples}."
+        f"3. Always use the exact tool name provided{tool_examples}.\n"
+        "\nNETWORKING NOTE:\n"
+        "Your tools run inside Docker containers. 'localhost' inside a container refers to the container itself, NOT the host machine.\n"
+        "- When a user gives you a URL with 'localhost', ALWAYS replace it with 'host.docker.internal' before passing to tools.\n"
+        "  Example: http://localhost:3001/ becomes http://host.docker.internal:3001/\n"
+        "- This applies to ALL tools: curl, nmap, nuclei, gobuster, etc.\n"
+        "\nANTI-LOOP RULES:\n"
+        "- NEVER call the same tool with the same arguments more than 2 times. If a tool returns an error or truncated data, summarize what you have and move on.\n"
+        "- If a result says 'truncated' or refers to a 'resource_uri', just summarize the partial data you received — do NOT try to fetch the full version repeatedly.\n"
+        "- If fetch_file returns 'File not found', do NOT retry. Summarize available data and continue.\n"
     )
 
     # 3. Create the DeepAgent (following user's reference architecture exactly)
@@ -427,7 +436,16 @@ async def stream_deep_agent(
         "\n\nCRITICAL TOOL USAGE INSTRUCTIONS:\n"
         "1. You MUST ONLY use the tools explicitly provided to you in your tools list.\n"
         "2. NEVER use or attempt to call tools that are not explicitly provided (e.g., do NOT use 'google:search', 'search', or 'web_search' unless explicitly in your tools list).\n"
-        f"3. Always use the exact tool name provided{tool_examples}."
+        f"3. Always use the exact tool name provided{tool_examples}.\n"
+        "\nNETWORKING NOTE:\n"
+        "Your tools run inside Docker containers. 'localhost' inside a container refers to the container itself, NOT the host machine.\n"
+        "- When a user gives you a URL with 'localhost', ALWAYS replace it with 'host.docker.internal' before passing to tools.\n"
+        "  Example: http://localhost:3001/ becomes http://host.docker.internal:3001/\n"
+        "- This applies to ALL tools: curl, nmap, nuclei, gobuster, etc.\n"
+        "\nANTI-LOOP RULES:\n"
+        "- NEVER call the same tool with the same arguments more than 2 times. If a tool returns an error or truncated data, summarize what you have and move on.\n"
+        "- If a result says 'truncated' or refers to a 'resource_uri', just summarize the partial data you received — do NOT try to fetch the full version repeatedly.\n"
+        "- If fetch_file returns 'File not found', do NOT retry. Summarize available data and continue.\n"
     )
 
     agent_kwargs: dict[str, Any] = {
