@@ -28,6 +28,9 @@ async def gemini_chat_completion(
     messages: list[dict],
     model: str,
     temperature: float = 0.7,
+    tools: list[dict] | None = None,
+    max_tokens: int = 4096,
+    response_format: dict | None = None,
 ) -> dict[str, Any]:
     from langchain_google_genai import ChatGoogleGenerativeAI
     from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
@@ -43,11 +46,21 @@ async def gemini_chat_completion(
         elif role == "assistant":
             lc_messages.append(AIMessage(content=content))
 
-    llm = ChatGoogleGenerativeAI(
-        model=model,
-        temperature=temperature,
-        google_api_key=os.getenv("GOOGLE_API_KEY")
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "google_api_key": os.getenv("GOOGLE_API_KEY"),
+        "max_output_tokens": max_tokens,
+    }
+    llm = ChatGoogleGenerativeAI(**kwargs)
+
+    # Bind tools if provided (Gemini supports function calling)
+    if tools:
+        try:
+            llm = llm.bind_tools(tools)
+        except Exception as e:
+            logger.warning("[Gemini] Failed to bind tools, proceeding without: %s", e)
+
     result = await llm.ainvoke(lc_messages)
 
     content_val = result.content
@@ -56,13 +69,29 @@ async def gemini_chat_completion(
     elif not isinstance(content_val, str):
         content_val = str(content_val)
 
+    response_msg: dict[str, Any] = {
+        "role": "assistant",
+        "content": content_val,
+    }
+
+    # Include tool_calls if the model made any
+    if hasattr(result, "tool_calls") and result.tool_calls:
+        response_msg["tool_calls"] = [
+            {
+                "id": tc.get("id", ""),
+                "type": "function",
+                "function": {
+                    "name": tc.get("name", ""),
+                    "arguments": json.dumps(tc.get("args", {})),
+                },
+            }
+            for tc in result.tool_calls
+        ]
+
     return {
         "choices": [
             {
-                "message": {
-                    "role": "assistant",
-                    "content": content_val
-                }
+                "message": response_msg,
             }
         ]
     }
@@ -167,6 +196,19 @@ class OpenRouterClient:
                 messages=messages,
                 model=route_model,
                 temperature=temperature,
+                tools=tools,
+                max_tokens=max_tokens,
+                response_format=response_format,
+            )
+
+        if backend == "ollama_remote":
+            return await ollama_chat_completion(
+                messages=messages,
+                model_tag=route_model,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
             )
 
         if not self.api_keys:
@@ -402,7 +444,7 @@ class OpenRouterClient:
         if ovr == "ollama":
             return f"ollama:{default_ollama_model_tag()}"
         if ovr == "ollama_remote":
-            return f"ollama:{default_remote_model_tag()}"
+            return f"ollama_remote:{default_remote_model_tag()}"
         if ovr == "openrouter":
             return MODEL_TIERS.get(task_complexity, DEFAULT_CHAT_MODEL)
         if os.getenv("LLM_PROVIDER", "").strip().lower() == "ollama":

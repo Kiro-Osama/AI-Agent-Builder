@@ -288,7 +288,6 @@ def _extract_node_details(node_name: str, node_state: dict, accumulated: dict) -
 async def _run_graph_async(graph, initial_state: dict, task_id: str) -> dict:
     """Run the LangGraph pipeline asynchronously with detailed progress."""
     accumulated_state = dict(initial_state)
-    final_state = None
 
     async for state in graph.astream(initial_state):
         for node_name, node_state in state.items():
@@ -310,6 +309,5 @@ async def _run_graph_async(graph, initial_state: dict, task_id: str) -> dict:
                     "details": details,
                 },
             )
-            final_state = node_state
 
-    return final_state or initial_state
+    return accumulated_state

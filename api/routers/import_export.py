@@ -27,6 +27,53 @@ router = APIRouter()
 
 EXPORT_VERSION = "1"
 
+# Docker image registries considered trusted for imports
+_TRUSTED_REGISTRIES = {"docker.io", "ghcr.io", "gcr.io", "mcr.microsoft.com", ""}
+_MAX_PROMPT_LENGTH = 50_000  # 50KB max for system prompts
+
+
+def _validate_import_content(data: dict, export_type: str) -> None:
+    """
+    Basic validation of imported templates to catch obviously malicious content.
+    Raises HTTPException on validation failure.
+    """
+    agents = []
+    if export_type == "agent":
+        tmpl = data.get("template", {})
+        agents = tmpl.get("agents", []) if isinstance(tmpl, dict) else []
+    elif export_type == "workflow":
+        wf = data.get("workflow", {})
+        agents = wf.get("agents", []) if isinstance(wf, dict) else []
+
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+
+        # Check system prompt length
+        prompt = agent.get("system_prompt", "")
+        if isinstance(prompt, str) and len(prompt) > _MAX_PROMPT_LENGTH:
+            raise HTTPException(
+                422,
+                f"Agent '{agent.get('agent_name', '?')}' has an excessively long "
+                f"system prompt ({len(prompt)} chars, max {_MAX_PROMPT_LENGTH}). "
+                "This may indicate a prompt injection attack.",
+            )
+
+        # Check Docker images
+        for mcp in agent.get("selected_mcps", []):
+            if not isinstance(mcp, dict):
+                continue
+            image = mcp.get("docker_image", "")
+            if not image:
+                continue
+            parts = image.split("/")
+            registry = parts[0] if len(parts) > 2 and "." in parts[0] else ""
+            if registry and registry not in _TRUSTED_REGISTRIES:
+                logger.warning(
+                    "[Import] Untrusted Docker registry '%s' in image '%s'",
+                    registry, image,
+                )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -170,6 +217,9 @@ async def import_config(
             "Unrecognised export file. Missing or invalid 'export_type' "
             "(expected 'agent' or 'workflow')."
         )
+
+    # ── Content validation (defense against malicious templates) ──────────
+    _validate_import_content(data, export_type)
 
     # ── Agent import ─────────────────────────────────────────────────────────
     if export_type == "agent":

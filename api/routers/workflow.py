@@ -444,6 +444,7 @@ async def chat_with_workflow(
                 shared_state=wf_session.shared_state,
                 execution_log=wf_session.execution_log[-50:],
                 current_agent=wf_session.current_agent,
+                memory_state=wf_session.get_memory_state_for_persistence(),
             )
         )
         await db.commit()

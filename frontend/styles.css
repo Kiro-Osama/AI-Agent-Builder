@@ -1194,9 +1194,10 @@ select option {
     cursor: pointer;
     transition: background 0.15s;
     font-size: 0.82rem;
+    color: var(--text-primary);
 }
 
-.picker-item:hover { background: rgba(255,255,255,0.04); }
+.picker-item:hover { background: rgba(255,255,255,0.06); }
 
 .picker-item input[type="checkbox"] {
     accent-color: var(--accent-purple);
@@ -1205,8 +1206,8 @@ select option {
     flex-shrink: 0;
 }
 
-.picker-item-name { color: var(--text-primary); font-weight: 500; }
-.picker-item-meta { color: var(--text-muted); font-size: 0.72rem; margin-left: auto; }
+.picker-item-name { color: #f0f0f5; font-weight: 500; }
+.picker-item-meta { color: #8888a0; font-size: 0.72rem; margin-left: auto; }
 
 .picker-item .badge-config {
     font-size: 0.62rem;

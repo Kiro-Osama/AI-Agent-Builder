@@ -807,7 +807,8 @@
                     prov.value === 'ollama_remote' ? 'Ollama (remote)' : 'Ollama (local)';
             } else if (gemini) {
                 selectedModel = null;
-                document.getElementById('agentModel').textContent = 'gemini-3.1-flash-lite-preview';
+                const geminiModel = (agentConfig && agentConfig.gemini_model) || 'gemini';
+                document.getElementById('agentModel').textContent = geminiModel;
             } else if (agentConfig) {
                 onModelChange();
             }

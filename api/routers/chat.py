@@ -41,6 +41,9 @@ conversations: dict[str, list[dict]] = {}
 # Cache agent configs loaded from DB (keyed by task_id)
 agent_configs: dict[str, dict] = {}
 
+# Track last-activity timestamps for TTL eviction (keyed same as conversations)
+_session_timestamps: dict[str, float] = {}
+
 DEFAULT_MODEL = os.getenv("DEEPAGENT_MODEL", os.getenv("DEFAULT_CHAT_MODEL", "gemini-3.1-flash-lite-preview"))
 
 
@@ -151,6 +154,10 @@ async def chat_with_agent(
     if key not in conversations:
         conversations[key] = []
 
+    # Track activity for TTL eviction
+    import time as _time
+    _session_timestamps[key] = _time.time()
+
     history = conversations[key]
 
     # Resolve model
@@ -244,10 +251,14 @@ async def get_agent_info(task_id: str, db: AsyncSession = Depends(get_db)):
     selected_mcps = agent.get("selected_mcps", [])
     config_required = await mcp_config_required_for_modal(db, selected_mcps)
 
+    stored_model = agent.get("assigned_openrouter_model", "unknown")
+    gemini_model = os.getenv("DEEPAGENT_MODEL", "gemini-2.0-flash-lite")
+
     return {
         "task_id": task_id,
         "agent_name": agent.get("agent_name", "AI_Assistant"),
-        "model": agent.get("assigned_openrouter_model", "unknown"),
+        "model": stored_model,
+        "gemini_model": gemini_model,
         "system_prompt": agent.get("system_prompt", ""),
         "selected_mcps": selected_mcps,
         "selected_skills": agent.get("selected_skills", []),
@@ -262,6 +273,7 @@ class ChatStreamRequest(BaseModel):
     conversation_id: str | None = None
     llm_provider: str | None = None
     model: str | None = None
+    mcp_configs: dict[str, dict] | None = None  # user-provided MCP API keys
 
 
 @router.post("/chat/{task_id}/stream")
@@ -299,7 +311,7 @@ async def chat_stream(
                 history=history_snapshot,
                 skill_ids=skill_ids or None,
                 mcp_configs=selected_mcps,
-                mcp_user_configs=None,
+                mcp_user_configs=request.mcp_configs,
                 model=model,
             ):
                 event_type = event.get("type")

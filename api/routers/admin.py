@@ -181,10 +181,35 @@ async def test_mcp(
 
 
 def _generate_embedding_for_mcp(mcp_id: int):
-    """Background task to generate embedding for a single MCP."""
+    """Background task to generate embedding for a single MCP (runs in thread pool)."""
+    import os
+    from sqlalchemy import create_engine, select, update
+    from sqlalchemy.orm import Session as SyncSession
+
+    sync_url = os.getenv("ALEMBIC_DATABASE_URL", "").strip()
+    if not sync_url:
+        logger.warning("ALEMBIC_DATABASE_URL not set — skipping background embedding")
+        return
+
     try:
-        from core.embeddings_service import EmbeddingsService
-        svc = EmbeddingsService()
-        svc.embed_single_mcp(mcp_id)
+        from core.embeddings import embedding_generator
+
+        engine = create_engine(sync_url, pool_pre_ping=True)
+        with SyncSession(engine) as session:
+            mcp = session.execute(select(MCP).where(MCP.id == mcp_id)).scalar_one_or_none()
+            if not mcp:
+                return
+
+            text = f"{mcp.mcp_name}: {mcp.description}"
+            if mcp.tools_provided:
+                tool_names = [t.get("name", "") for t in mcp.tools_provided if isinstance(t, dict)]
+                text += f" Tools: {', '.join(tool_names)}"
+
+            embedding = embedding_generator.generate_sync(text)
+            session.execute(
+                update(MCP).where(MCP.id == mcp_id).values(embedding=embedding)
+            )
+            session.commit()
+            logger.info(f"Background embedding generated for MCP {mcp_id}")
     except Exception as e:
         logger.warning(f"Background embedding for MCP {mcp_id} failed: {e}")

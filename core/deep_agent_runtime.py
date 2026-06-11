@@ -75,6 +75,28 @@ def _resolve_skills_dir() -> str:
     return path
 
 
+def _build_strict_system_prompt(base_prompt: str, mcp_tools: list | None = None) -> str:
+    """Inject anti-hallucination and networking instructions into the system prompt."""
+    tool_names = [t.name for t in mcp_tools] if mcp_tools else []
+    tool_examples = f" (e.g., '{tool_names[0]}')" if tool_names else ""
+
+    return base_prompt + (
+        "\n\nCRITICAL TOOL USAGE INSTRUCTIONS:\n"
+        "1. You MUST ONLY use the tools explicitly provided to you in your tools list.\n"
+        "2. NEVER use or attempt to call tools that are not explicitly provided (e.g., do NOT use 'google:search', 'search', or 'web_search' unless explicitly in your tools list).\n"
+        f"3. Always use the exact tool name provided{tool_examples}.\n"
+        "\nNETWORKING NOTE:\n"
+        "Your tools run inside Docker containers. 'localhost' inside a container refers to the container itself, NOT the host machine.\n"
+        "- When a user gives you a URL with 'localhost', ALWAYS replace it with 'host.docker.internal' before passing to tools.\n"
+        "  Example: http://localhost:3001/ becomes http://host.docker.internal:3001/\n"
+        "- This applies to ALL tools: curl, nmap, nuclei, gobuster, etc.\n"
+        "\nANTI-LOOP RULES:\n"
+        "- NEVER call the same tool with the same arguments more than 2 times. If a tool returns an error or truncated data, summarize what you have and move on.\n"
+        "- If a result says 'truncated' or refers to a 'resource_uri', just summarize the partial data you received \u2014 do NOT try to fetch the full version repeatedly.\n"
+        "- If fetch_file returns 'File not found', do NOT retry. Summarize available data and continue.\n"
+    )
+
+
 # -----------------------------------------------
 # LLM Factory — Gemini primary, OpenRouter/Ollama fallback
 # -----------------------------------------------
@@ -302,26 +324,8 @@ async def run_deep_agent(
     skill_paths = resolve_skill_paths(skill_ids)
     logger.info("[DeepAgent] Skill paths: %s", skill_paths)
 
-    # Dynamically get tool names to keep the prompt generic
-    tool_names = [t.name for t in mcp_tools] if mcp_tools else []
-    tool_examples = f" (e.g., '{tool_names[0]}')" if tool_names else ""
-    
     # Inject strong anti-hallucination instructions to prevent R1/Ollama models from making up tools
-    strict_system_prompt = system_prompt + (
-        "\n\nCRITICAL TOOL USAGE INSTRUCTIONS:\n"
-        "1. You MUST ONLY use the tools explicitly provided to you in your tools list.\n"
-        "2. NEVER use or attempt to call tools that are not explicitly provided (e.g., do NOT use 'google:search', 'search', or 'web_search' unless explicitly in your tools list).\n"
-        f"3. Always use the exact tool name provided{tool_examples}.\n"
-        "\nNETWORKING NOTE:\n"
-        "Your tools run inside Docker containers. 'localhost' inside a container refers to the container itself, NOT the host machine.\n"
-        "- When a user gives you a URL with 'localhost', ALWAYS replace it with 'host.docker.internal' before passing to tools.\n"
-        "  Example: http://localhost:3001/ becomes http://host.docker.internal:3001/\n"
-        "- This applies to ALL tools: curl, nmap, nuclei, gobuster, etc.\n"
-        "\nANTI-LOOP RULES:\n"
-        "- NEVER call the same tool with the same arguments more than 2 times. If a tool returns an error or truncated data, summarize what you have and move on.\n"
-        "- If a result says 'truncated' or refers to a 'resource_uri', just summarize the partial data you received — do NOT try to fetch the full version repeatedly.\n"
-        "- If fetch_file returns 'File not found', do NOT retry. Summarize available data and continue.\n"
-    )
+    strict_system_prompt = _build_strict_system_prompt(system_prompt, mcp_tools)
 
     # 3. Create the DeepAgent (following user's reference architecture exactly)
     agent_kwargs: dict[str, Any] = {
@@ -429,24 +433,7 @@ async def stream_deep_agent(
     llm = create_llm(model=effective_model)
     skill_paths = resolve_skill_paths(skill_ids)
 
-    tool_names = [t.name for t in mcp_tools] if mcp_tools else []
-    tool_examples = f" (e.g., '{tool_names[0]}')" if tool_names else ""
-
-    strict_system_prompt = system_prompt + (
-        "\n\nCRITICAL TOOL USAGE INSTRUCTIONS:\n"
-        "1. You MUST ONLY use the tools explicitly provided to you in your tools list.\n"
-        "2. NEVER use or attempt to call tools that are not explicitly provided (e.g., do NOT use 'google:search', 'search', or 'web_search' unless explicitly in your tools list).\n"
-        f"3. Always use the exact tool name provided{tool_examples}.\n"
-        "\nNETWORKING NOTE:\n"
-        "Your tools run inside Docker containers. 'localhost' inside a container refers to the container itself, NOT the host machine.\n"
-        "- When a user gives you a URL with 'localhost', ALWAYS replace it with 'host.docker.internal' before passing to tools.\n"
-        "  Example: http://localhost:3001/ becomes http://host.docker.internal:3001/\n"
-        "- This applies to ALL tools: curl, nmap, nuclei, gobuster, etc.\n"
-        "\nANTI-LOOP RULES:\n"
-        "- NEVER call the same tool with the same arguments more than 2 times. If a tool returns an error or truncated data, summarize what you have and move on.\n"
-        "- If a result says 'truncated' or refers to a 'resource_uri', just summarize the partial data you received — do NOT try to fetch the full version repeatedly.\n"
-        "- If fetch_file returns 'File not found', do NOT retry. Summarize available data and continue.\n"
-    )
+    strict_system_prompt = _build_strict_system_prompt(system_prompt, mcp_tools)
 
     agent_kwargs: dict[str, Any] = {
         "model": llm,

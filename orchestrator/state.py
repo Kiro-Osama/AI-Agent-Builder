@@ -36,6 +36,7 @@ class AgentBuilderState(TypedDict):
 
     # --- Node 5 Output ---
     validated_skills: list[dict]         # Skills that passed sandbox testing
+    sandbox_action: str                  # "proceed" | "retry"
 
     # --- Node 6 Output ---
     selected_tools: dict                 # Final filtered tool selection

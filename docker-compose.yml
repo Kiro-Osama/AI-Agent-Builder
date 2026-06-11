@@ -162,7 +162,7 @@ services:
       - dev
 
   # -------------------------------------------
-  # Vulnerable Web App for Security Testing
+  # Vulnerable Web App for Security Testing (DEV ONLY)
   # -------------------------------------------
   juice-shop:
     image: bkimminich/juice-shop:latest
@@ -170,6 +170,8 @@ services:
     restart: unless-stopped
     ports:
       - "3001:3000"
+    profiles:
+      - dev
 
 volumes:
   pgdata:

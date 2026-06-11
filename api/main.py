@@ -43,14 +43,44 @@ async def lifespan(app: FastAPI):
 
     # Periodic cleanup of stale conversation histories
     async def ttl_cleanup_loop() -> None:
-        ttl_seconds = 60 * 60  # 1 hour
+        import os as _os
+        ttl_seconds = int(_os.getenv("SESSION_TTL_MINUTES", "60")) * 60
+        max_sessions = 500  # hard cap to prevent OOM
         while True:
             try:
                 await asyncio.sleep(60)
                 import time
                 now = time.time()
-                # Clean up old conversations from chat router
-                # (DeepAgent is stateless — no container sessions to manage)
+
+                # Clean up chat sessions
+                from api.routers.chat import conversations, agent_configs, _session_timestamps
+
+                # Evict sessions older than TTL
+                stale_keys = [
+                    k for k, ts in _session_timestamps.items()
+                    if now - ts > ttl_seconds
+                ]
+                for k in stale_keys:
+                    conversations.pop(k, None)
+                    _session_timestamps.pop(k, None)
+                if stale_keys:
+                    logger.info("Cleanup: evicted %d stale chat session(s)", len(stale_keys))
+
+                # Evict excess sessions if over hard cap (oldest first)
+                if len(conversations) > max_sessions:
+                    sorted_keys = sorted(_session_timestamps.items(), key=lambda x: x[1])
+                    to_remove = len(conversations) - max_sessions
+                    for k, _ in sorted_keys[:to_remove]:
+                        conversations.pop(k, None)
+                        _session_timestamps.pop(k, None)
+                    logger.warning("Cleanup: evicted %d excess sessions (cap=%d)", to_remove, max_sessions)
+
+                # Evict agent configs that have no active sessions
+                active_task_ids = {k.split(":")[0] for k in conversations}
+                stale_configs = [tid for tid in agent_configs if tid not in active_task_ids]
+                for tid in stale_configs:
+                    agent_configs.pop(tid, None)
+
             except asyncio.CancelledError:
                 break
             except Exception as e:

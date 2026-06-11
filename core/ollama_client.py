@@ -146,8 +146,8 @@ def resolve_ollama_route(explicit_model: str | None, fallback_default: str) -> t
     if override == "ollama_remote":
         if m.lower().startswith("ollama:"):
             tag = m.split(":", 1)[1].strip() or default_remote_model_tag()
-            return "ollama", tag
-        return "ollama", default_remote_model_tag()
+            return "ollama_remote", tag
+        return "ollama_remote", default_remote_model_tag()
 
     low = m.lower()
     if low.startswith("ollama:"):
@@ -158,7 +158,7 @@ def resolve_ollama_route(explicit_model: str | None, fallback_default: str) -> t
     if os.getenv("LLM_PROVIDER", "").strip().lower() == "ollama":
         return "ollama", default_ollama_model_tag()
     if os.getenv("LLM_PROVIDER", "").strip().lower() == "ollama_remote":
-        return "ollama", default_remote_model_tag()
+        return "ollama_remote", default_remote_model_tag()
     return "openrouter", m
 
 

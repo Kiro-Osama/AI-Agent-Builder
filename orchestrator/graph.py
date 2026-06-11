@@ -79,9 +79,26 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
-    # --- Skill creation flow (retry routing TBD; always continue to filter) ---
+    # --- Skill creation flow with retry support ---
     graph.add_edge("skill_creator", "sandbox_validator")
-    graph.add_edge("sandbox_validator", "ai_final_filter")
+
+    def _route_after_sandbox(state: AgentBuilderState) -> str:
+        """Conditional edge after sandbox: retry skill creation or proceed."""
+        action = state.get("sandbox_action", "proceed")
+        if action == "retry":
+            logger.info("  → Routing back to Skill Creator (retry)")
+            return "skill_creator"
+        logger.info("  → Routing to AI Final Filter (validation done)")
+        return "ai_final_filter"
+
+    graph.add_conditional_edges(
+        "sandbox_validator",
+        _route_after_sandbox,
+        {
+            "skill_creator": "skill_creator",
+            "ai_final_filter": "ai_final_filter",
+        },
+    )
 
     # --- Final pipeline ---
     graph.add_edge("ai_final_filter", "docker_mcp_runner")
